@@ -32,14 +32,21 @@ open Misc
 open Protocol
 open Merlin_lib
 
-type state = {
-  mutable buffer : Buffer.t;
-  mutable lexer : Lexer.t option;
+(* Gymnastic to hide lexer state in an existential variable *)
+type 'lexer buffer = {
+  buffer : Buffer.t;
+  mutable lexer : Lexer.Caml_lexer.state Lexer.t option;
+  mutable mark : Parser.frame option;
 }
+
+type a_buffer = Buffer : 'state buffer -> a_buffer
+type state = a_buffer ref
 
 let new_state () =
   let buffer = Buffer.create Parser.implementation in
-  {buffer; lexer = None}
+  ref (Buffer {buffer; lexer = None; mark = None})
+
+(* Routines *)
 
 let with_typer state f =
   let typer = Buffer.typer state.buffer in
@@ -53,7 +60,7 @@ let cursor_state state =
       false
     | Some lexer ->
       Lexer.position lexer,
-      Buffer.has_mark state.buffer (Lexer.get_mark lexer)
+      Buffer.has_mark state.buffer state.mark
   in
   { cursor; marker }
 
@@ -89,15 +96,16 @@ let buffer_freeze state items =
 
 module Printtyp = Type_utils.Printtyp
 
-let dispatch (state : state) =
+let dispatch (state : state)  =
   fun (type a) (request : a request) ->
+  let Buffer a_buffer = !state in
   let verbosity = track_verbosity request in
   (match request with
   | (Tell (`Start pos) : a request) ->
-    let lexer = Buffer.start_lexing ?pos state.buffer in
-    state.lexer <- Some lexer;
-    buffer_update state (Lexer.history lexer);
-    cursor_state state
+    let lexer = Buffer.start_lexing ?pos a_buffer.buffer in
+    a_buffer.lexer <- Some lexer;
+    buffer_update a_buffer (Lexer.history lexer);
+    cursor_state a_buffer
 
   | (Tell (`File _ | `Source _ | `Eof as source) : a request) ->
     let source = match source with
@@ -110,36 +118,39 @@ let dispatch (state : state) =
         | source -> Some source
     in
     begin match source with
-      | None -> cursor_state state
+      | None -> cursor_state a_buffer
       | Some source ->
-        let lexer = match state.lexer with
+        let lexer = match a_buffer.lexer with
           | Some lexer ->
             assert (not (Lexer.eof lexer));
             lexer
           | None ->
-            let lexer = Buffer.start_lexing state.buffer in
-            state.lexer <- Some lexer; lexer in
-        assert (Lexer.feed lexer source);
-        buffer_update state (Lexer.history lexer);
+            let lexer = Buffer.start_lexing a_buffer.buffer in
+            a_buffer.lexer <- Some lexer; lexer in
+        Lexer.feed lexer source;
+        buffer_update a_buffer (Lexer.history lexer);
         (* Stop lexer on EOF *)
-        if Lexer.eof lexer then state.lexer <- None;
-        cursor_state state
+        if Lexer.eof lexer then
+          begin
+            a_buffer.lexer <- None;
+            a_buffer.mark <- None
+          end;
+        cursor_state a_buffer
     end
 
   | (Tell `Marker : a request) ->
-    let lexer = match state.lexer with
+    begin match a_buffer.lexer with
       | Some lexer ->
-        assert (not (Lexer.eof lexer));
-        lexer
+        assert (not (Lexer.eof lexer))
       | None ->
-        let lexer = Buffer.start_lexing state.buffer in
-        state.lexer <- Some lexer; lexer
-    in
-    Lexer.put_mark lexer (Buffer.get_mark state.buffer);
-    cursor_state state
+        let lexer = Buffer.start_lexing a_buffer.buffer in
+        a_buffer.lexer <- Some lexer
+    end;
+    a_buffer.mark <- (Buffer.get_mark a_buffer.buffer);
+    cursor_state a_buffer
 
   | (Type_expr (source, pos) : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let env = match pos with
       | None -> Typer.env typer
       | Some pos -> (Completion.node_at typer pos).BrowseT.t_env
@@ -152,7 +163,7 @@ let dispatch (state : state) =
     let open BrowseT in
     let open Typedtree in
     let open Override in
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let structures = Typer.contents typer in
     let structures = Browse.of_typer_contents structures in
     let path = Browse.enclosing pos structures in
@@ -195,7 +206,7 @@ let dispatch (state : state) =
     let exprs =
       match expro with
       | None ->
-        let lexer = Buffer.lexer state.buffer in
+        let lexer = Buffer.lexer a_buffer.buffer in
         let lexer =
           History.seek_backward
             (fun (_,item) -> Lexing.compare_pos pos (Lexer.item_start item) < 0)
@@ -287,7 +298,7 @@ let dispatch (state : state) =
       (small_enclosings @ result)
 
   | (Enclosing pos : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let open BrowseT in
     let structures = Typer.contents typer in
     let structures = Browse.of_typer_contents structures in
@@ -295,17 +306,17 @@ let dispatch (state : state) =
     List.map (fun t -> t.BrowseT.t_loc) path
 
   | (Complete_prefix (prefix, pos) : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let node = Completion.node_at typer pos in
-    let compl = Completion.node_complete state.buffer node prefix in
+    let compl = Completion.node_complete a_buffer.buffer node prefix in
     List.rev compl
 
   | (Expand_prefix (prefix, pos) : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let env =
       let node = Completion.node_at typer pos in
       node.BrowseT.t_env in
-    let global_modules = Buffer.global_modules state.buffer in
+    let global_modules = Buffer.global_modules a_buffer.buffer in
     let lidents, last =
       let ts = Expansion.explore ~global_modules env in
       Expansion.get_lidents ts prefix
@@ -335,7 +346,7 @@ let dispatch (state : state) =
 
   | (Locate (patho, ml_or_mli, opt_pos) : a request) ->
     let env, local_defs =
-      with_typer state @@ fun typer ->
+      with_typer a_buffer @@ fun typer ->
       match opt_pos with
       | None     -> Typer.env typer, []
       | Some pos ->
@@ -346,7 +357,7 @@ let dispatch (state : state) =
       match patho, opt_pos with
       | None, None -> failwith "invalid arguments"
       | None, Some pos ->
-        let lexer = Buffer.lexer state.buffer in
+        let lexer = Buffer.lexer a_buffer.buffer in
         let lexer =
           History.seek_backward (fun (_,item) ->
             Lexing.compare_pos pos (Lexer.item_start item) < 0) lexer
@@ -358,8 +369,8 @@ let dispatch (state : state) =
         path
       | Some path, _ -> path
     in
-    let is_implementation = Buffer.is_implementation state.buffer in
-    let project = Buffer.project state.buffer in
+    let is_implementation = Buffer.is_implementation a_buffer.buffer in
+    let project = Buffer.project a_buffer.buffer in
     begin match
       Track_definition.from_string ~project ~env ~local_defs ~is_implementation
         ?pos:opt_pos ml_or_mli path
@@ -372,7 +383,7 @@ let dispatch (state : state) =
     end
 
   | (Case_analysis ({ Location. loc_start ; loc_end } as loc) : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let env = Typer.env typer in
     let structures = Typer.contents typer in
     let structures = Browse.of_typer_contents structures in
@@ -387,21 +398,21 @@ let dispatch (state : state) =
     end
 
   | (Outline : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let typed_tree = Typer.contents typer in
     Outline.get (Browse.of_typer_contents typed_tree)
 
   | (Drop : a request) ->
-    let lexer = Buffer.lexer state.buffer in
-    buffer_update state (History.drop_tail lexer);
-    buffer_changed state;
-    cursor_state state
+    let lexer = Buffer.lexer a_buffer.buffer in
+    buffer_update a_buffer (History.drop_tail lexer);
+    buffer_changed a_buffer;
+    cursor_state a_buffer
 
   | (Seek `Position : a request) ->
-    cursor_state state
+    cursor_state a_buffer
 
   | (Seek (`Before pos) : a request) ->
-    let items = Buffer.lexer state.buffer in
+    let items = Buffer.lexer a_buffer.buffer in
     (* true while i is before pos *)
     let until_after pos (_,i) =
       Lexing.compare_pos (Lexer.item_start i) pos < 0 in
@@ -410,11 +421,11 @@ let dispatch (state : state) =
       Lexing.compare_pos (Lexer.item_start i) pos >= 0 in
     let items = History.seek_forward (until_after pos) items in
     let items = History.seek_backward (until_before pos) items in
-    buffer_freeze state items;
-    cursor_state state
+    buffer_freeze a_buffer items;
+    cursor_state a_buffer
 
   | (Seek (`Exact pos) : a request) ->
-    let items = Buffer.lexer state.buffer in
+    let items = Buffer.lexer a_buffer.buffer in
     (* true while i is before pos *)
     let until_after pos (_,i) =
       Lexing.compare_pos (Lexer.item_start i) pos < 0 in
@@ -423,20 +434,20 @@ let dispatch (state : state) =
       Lexing.compare_pos (Lexer.item_end i) pos > 0 in
     let items = History.seek_forward (until_after pos) items in
     let items = History.seek_backward (until_before pos) items in
-    buffer_freeze state items;
-    cursor_state state
+    buffer_freeze a_buffer items;
+    cursor_state a_buffer
 
   | (Seek `End : a request) ->
-    let items = Buffer.lexer state.buffer in
+    let items = Buffer.lexer a_buffer.buffer in
     let items = History.seek_forward (fun _ -> true) items in
-    buffer_freeze state items;
-    cursor_state state
+    buffer_freeze a_buffer items;
+    cursor_state a_buffer
 
   | (Seek `Marker : a request) ->
-    begin match Option.bind state.lexer ~f:Lexer.get_mark with
+    begin match a_buffer.mark with
     | None -> ()
     | Some mark ->
-      let recoveries = Buffer.recover_history state.buffer in
+      let recoveries = Buffer.recover_history a_buffer.buffer in
       let diff = ref None in
       let check_item (lex_item,recovery) =
         let parser = Recover.parser recovery in
@@ -449,11 +460,11 @@ let dispatch (state : state) =
         let recoveries = History.seek_backward check_item recoveries in
         let recoveries = History.move 1 recoveries in
         let item, _ = History.focused recoveries in
-        let items = Buffer.lexer state.buffer in
+        let items = Buffer.lexer a_buffer.buffer in
         let items = History.seek_backward (fun (_,item') -> item' != item) items in
-        buffer_freeze state items;
+        buffer_freeze a_buffer items;
     end;
-    cursor_state state
+    cursor_state a_buffer
 
   | (Boundary (dir,pos) : a request) ->
     let get_enclosing_str_item pos browses =
@@ -469,7 +480,7 @@ let dispatch (state : state) =
       | [] -> None
       | item :: _ -> Some item
     in
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let browses  = Browse.of_typer_contents (Typer.contents typer) in
     Option.bind (get_enclosing_str_item pos browses) ~f:(fun item ->
         match dir with
@@ -495,12 +506,12 @@ let dispatch (state : state) =
       | `Auto, _ -> Raw_parser.implementation_state
     in
     let buffer = Buffer.create ?dot_merlins ?path parser in
-    buffer_changed state;
-    state.buffer <- buffer;
-    cursor_state state
+    buffer_changed a_buffer;
+    state := Buffer { buffer; lexer = None; mark = None };
+    cursor_state a_buffer
 
   | (Refresh : a request) ->
-    Project.invalidate ~flush:true (Buffer.project state.buffer)
+    Project.invalidate ~flush:true (Buffer.project a_buffer.buffer)
 
   | (Errors : a request) ->
     begin try
@@ -509,12 +520,12 @@ let dispatch (state : state) =
         let err exns =
           List.sort_uniq ~cmp (List.map ~f:Error_report.of_exn exns)
         in
-        let err_lexer  = err (Buffer.lexer_errors state.buffer) in
-        let err_parser = err (Buffer.parser_errors state.buffer) in
+        let err_lexer  = err (Buffer.lexer_errors a_buffer.buffer) in
+        let err_parser = err (Buffer.parser_errors a_buffer.buffer) in
         let err_typer  =
           (* When there is a cmi error, we will have a lot of meaningless errors,
            * there is no need to report them. *)
-          let typer = Buffer.typer state.buffer in
+          let typer = Buffer.typer a_buffer.buffer in
           let exns = Typer.exns typer @ Typer.delayed_checks typer in
           let exns =
             let cmi_error = function Cmi_format.Error _ -> true | _ -> false in
@@ -541,19 +552,19 @@ let dispatch (state : state) =
     end
 
   | (Dump `Parser : a request) ->
-    Merlin_recover.dump (Buffer.recover state.buffer);
+    Merlin_recover.dump (Buffer.recover a_buffer.buffer);
 
   | (Dump `Typer_input : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let ppf, to_string = Format.to_string () in
     Typer.dump ppf typer;
     `String (to_string ())
 
   | (Dump `Recover : a request) ->
-    Merlin_recover.dump_recoverable (Buffer.recover state.buffer);
+    Merlin_recover.dump_recoverable (Buffer.recover a_buffer.buffer);
 
   | (Dump (`Env (kind, pos)) : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let env = match pos with
       | None -> Typer.env typer
       | Some pos -> (Completion.node_at typer pos).BrowseT.t_env
@@ -574,19 +585,19 @@ let dispatch (state : state) =
     `List (List.map ~f:aux sg)
 
   | (Dump `Browse : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let structures = Typer.contents typer in
     let structures = Browse.of_typer_contents structures in
     Browse_misc.dump_ts structures
 
   | (Dump `Tokens : a request) ->
-    let tokens = Buffer.lexer state.buffer in
+    let tokens = Buffer.lexer a_buffer.buffer in
     let tokens = History.seek_backward (fun _ -> true) tokens in
     let tokens = History.tail tokens in
     `List (List.filter_map tokens
              ~f:(fun (_exns,item) -> match item with
              | Lexer.Error _ -> None
-             | Lexer.Valid (s,t,e) ->
+             | Lexer.Valid (s,t,e,_) ->
                let t = Raw_parser_values.symbol_of_token t in
                let t = Raw_parser_values.class_of_symbol t in
                let t = Raw_parser_values.string_of_class t in
@@ -603,7 +614,7 @@ let dispatch (state : state) =
 
   | (Which_path xs : a request) ->
     begin
-      let project = Buffer.project state.buffer in
+      let project = Buffer.project a_buffer.buffer in
       let rec aux = function
         | [] -> raise Not_found
         | x :: xs ->
@@ -618,25 +629,25 @@ let dispatch (state : state) =
     end
 
   | (Which_with_ext exts : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     let path = Path_list.to_strict_list (Project.source_path project) in
     let with_ext ext = modules_in_path ~ext path in
     List.concat_map ~f:with_ext exts
 
   | (Flags (`Add flags) : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     Merlin_lib.Project.User.add_flags project flags
 
   | (Flags `Clear : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     Merlin_lib.Project.User.clear_flags project
 
   | (Flags_get : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     Merlin_lib.Project.User.get_flags project
 
   | (Project_get : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     (List.map ~f:fst (Project.get_dot_merlins project),
      match Project.get_dot_merlins_failure project with
      | [] -> `Ok
@@ -646,11 +657,11 @@ let dispatch (state : state) =
     Fl_package_base.list_packages ()
 
   | (Findlib_use packages : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     Project.User.load_packages project packages
 
   | (Extension_list kind : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     let enabled = Project.extensions project in
     let set = match kind with
       | `All -> Extension.all
@@ -664,7 +675,7 @@ let dispatch (state : state) =
       | `Enabled  -> true
       | `Disabled -> false
     in
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     begin match
       List.filter_map exts ~f:(Project.User.set_extension project ~enabled)
     with
@@ -673,24 +684,24 @@ let dispatch (state : state) =
     end
 
   | (Path (var,action,pathes) : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     List.iter pathes
       ~f:(Project.User.path project ~action ~var ?cwd:None)
 
   | (Path_list `Build : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     Path_list.to_strict_list (Project.build_path project)
 
   | (Path_list `Source : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     Path_list.to_strict_list (Project.source_path project)
 
   | (Path_reset : a request) ->
-    let project = Buffer.project state.buffer in
+    let project = Buffer.project a_buffer.buffer in
     Project.User.reset project
 
   | (Occurrences (`Ident_at pos) : a request) ->
-    with_typer state @@ fun typer ->
+    with_typer a_buffer @@ fun typer ->
     let str = Typer.contents typer in
     let str = Browse.of_typer_contents str in
     let node = match Browse.enclosing pos str with

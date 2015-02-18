@@ -83,7 +83,7 @@ module Project : sig
   val extensions: t -> Extension.set
 
   (* Lexer keywords for current config *)
-  val keywords: t -> Lexer.keywords
+  val keywords: t -> Raw_lexer.keywords
 
   (* Make global state point to current project *)
   val setup : t -> unit
@@ -142,7 +142,7 @@ end = struct
     cmt_path    : Path_list.t;
 
     mutable global_modules: string list option;
-    mutable keywords_cache: Lexer.keywords * Extension.set;
+    mutable keywords_cache: Raw_lexer.keywords * Extension.set;
     mutable validity_stamp: bool ref
   }
 
@@ -431,15 +431,15 @@ module Buffer : sig
 
   val project: t -> Project.t
 
-  val lexer: t -> (exn list * Lexer.item) History.t
-  val update: t -> (exn list * Lexer.item) History.t -> [`Nothing_done | `Updated]
-  val start_lexing: ?pos:Lexing.position -> t -> Lexer.t
+  val lexer: t -> (exn list * Lexer.Caml_lexer.state Lexer.item) History.t
+  val update: t -> (exn list * Lexer.Caml_lexer.state Lexer.item) History.t -> [`Nothing_done | `Updated]
+  val start_lexing: ?pos:Lexing.position -> t -> Lexer.Caml_lexer.state Lexer.t
   val lexer_errors: t -> exn list
 
   val parser: t -> Parser.t
   val parser_errors: t -> exn list
   val recover: t -> Recover.t
-  val recover_history : t -> (Lexer.item * Recover.t) History.t
+  val recover_history : t -> (Lexer.Caml_lexer.state Lexer.item * Recover.t) History.t
 
   val typer: t -> Typer.t
 
@@ -458,9 +458,9 @@ end = struct
     unit_name : string;
     mutable project : Project.t;
     mutable stamp : bool ref;
-    mutable keywords: Lexer.keywords;
-    mutable lexer: (exn list * Lexer.item) History.t;
-    mutable recover: (Lexer.item * Recover.t) History.t;
+    mutable keywords: Raw_lexer.keywords;
+    mutable lexer: (exn list * Lexer.Caml_lexer.state Lexer.item) History.t;
+    mutable recover: (Lexer.Caml_lexer.state Lexer.item * Recover.t) History.t;
     mutable typer: Typer.t;
   }
 
@@ -472,7 +472,7 @@ end = struct
 
   let initial_step kind (_,token) =
     let input = match token with
-      | Lexer.Valid (s,t,e) -> s,t,e
+      | Lexer.Valid (s,t,e,_) -> s,t,e
       | _ -> assert false
     in
     (token, Recover.fresh (Parser.from kind input))
@@ -506,7 +506,6 @@ end = struct
       with Not_found -> filename
     in
     let unit_name = String.capitalize unit_name in
-    let lexer = Lexer.empty ~filename in
     let project =
       match Project.get (find_dot_merlins dot_merlins) with
       | project, `Fresh -> project
@@ -514,11 +513,13 @@ end = struct
         ignore (Project.autoreload_dot_merlin project);
         project
     in
+    let keywords = Project.keywords project in
+    let lexer = Lexer.empty ~filename
+        (Lexer.Caml_lexer.from_keywords keywords) in
     let stamp = ref true in
     Project.setup project;
     {
-      dot_merlins; path; project; lexer; kind; unit_name; stamp;
-      keywords = Project.keywords project;
+      dot_merlins; path; project; lexer; kind; unit_name; stamp; keywords;
       recover = History.initial (initial_step kind (History.focused lexer));
       typer = Typer.fresh
           ~unit_name ~stamp:[Project.validity_stamp project; stamp]
@@ -559,7 +560,8 @@ end = struct
   let update t l =
     t.lexer <- l;
     let strong_check (_,token) (token',_) = token == token' in
-    let weak_check (_,token) (token',_) = Lexer.equal token token' in
+    let weak_check (_,token) (token',_) =
+      Lexer.item_equal Lexer.caml_lexer token token' in
     let init token = initial_step t.kind token in
     let strong_fold (_,token) (_,recover) = token, Recover.fold token recover in
     let weak_update (_,token) (_,recover) = (token,recover) in
@@ -583,8 +585,8 @@ end = struct
           (fun cur -> let line', _ = Lexing.split_pos cur in line <= line')
       in
       let item_pred = function
-        | _, Lexer.Valid (cur,_,_) when pos_pred cur -> true
-        | _, Lexer.Valid (p,_,_) when p = Lexing.dummy_pos -> true
+        | _, Lexer.Valid (cur,_,_,_) when pos_pred cur -> true
+        | _, Lexer.Valid (p,_,_,_) when p = Lexing.dummy_pos -> true
         | _, Lexer.Error _ -> true
         | _ -> false
       in
@@ -593,7 +595,7 @@ end = struct
       let lexer = History.move (-1) lexer in
       ignore (update b lexer)
     end;
-    Lexer.start kw b.lexer
+    Lexer.start Lexer.caml_lexer b.lexer
 
   let get_mark t = Parser.find_marker (parser t)
 

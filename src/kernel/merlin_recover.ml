@@ -207,7 +207,7 @@ let feed_recover original (s,tok,e as input) zipper =
 let fold warnings token t =
   match token with
   | Merlin_lexer.Error _ -> t
-  | Merlin_lexer.Valid (s,tok,e) ->
+  | Merlin_lexer.Valid (s,tok,e,_) ->
     let s,e = match tok with
       | EOF -> let pos = {e with Lexing.
                               pos_lnum = e.Lexing.pos_lnum + 1;
