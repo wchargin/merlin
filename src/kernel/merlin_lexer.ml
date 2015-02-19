@@ -28,27 +28,38 @@
 
 open Std
 
+type lexer_state = exn
+
 (* Lexing step *)
-type 'state item =
-  | Valid of Lexing.position * Raw_parser.token * Lexing.position * 'state option
+type item =
+  | Valid of Lexing.position * Raw_parser.token * Lexing.position * lexer_state
   | Error of Raw_lexer.error * Location.t
 
 module type S = sig
   type state
-  val equal: state -> state -> bool
+  exception State of state
 
   type t
   val start: Lexing.position -> state -> t
   val seek: t -> Lexing.position -> unit
-  val feed: t -> string -> (state item -> unit) -> unit
+  val feed: t -> string ->
+    token:(Lexing.position -> Raw_parser.token -> Lexing.position -> state option -> unit) ->
+    error:(Raw_lexer.error -> Location.t -> unit) ->
+    unit
   val position: t -> Lexing.position
   val eof: t -> bool
+end
+
+module type T = sig
+  module Lexer : S
+  val instance : Lexer.t
 end
 
 type 'state lexer = (module S with type state = 'state)
 
 (** Create an empty list new lexer *)
-let empty ~filename state =
+let empty (type state) ~filename
+    ((module Lexer) : state lexer) (state : state) =
   let pos =
     { Lexing.
       pos_fname = filename;
@@ -57,22 +68,16 @@ let empty ~filename state =
       pos_cnum  = 0;
     }
   in
-  History.initial ([], Valid (pos, Raw_parser.ENTRYPOINT, pos, Some state))
+  History.initial ([], Valid (pos, Raw_parser.ENTRYPOINT, pos, Lexer.State state))
 
-type ('state, 'lexer) lexer' =
-  (module S with type state = 'state and type t = 'lexer)
-
-type ('state, 'lexer) t' = {
+type t = {
   (* Result *)
-  mutable history: (exn list * 'state item) History.t;
+  mutable history: (exn list * item) History.t;
   (* Lexer *)
-  klass: ('state, 'lexer) lexer';
-  lexer: 'lexer;
+  lexer: (module T);
 }
 
-type 'state t = T : ('state, 'lexer) t' -> 'state t
-
-let history (T t) = t.history
+let history t = t.history
 
 (** Prepare for lexing.
     Returns the start position (end position of last valid token), and a
@@ -85,54 +90,55 @@ let make_lexbuf empty refill position =
        | Some s -> refill := None; s
        | None -> "")
 
-let start (type a) (type t) (klass : (t,a) lexer') history =
-  let module Lexer = (val klass) in
+let start (type state) ((module Lexer) : state lexer) history =
   let seek_start = function
-    | _, Valid (_,_,_,Some _) -> false
+    | _, Valid (_,_,_, Lexer.State _) -> false
     | _ -> true
   in
   let history = History.seek_backward seek_start history in
   let position, state = match History.focused history with
-    | _, Valid (_,_,p,Some state) -> p, state
+    | _, Valid (_,_,p, Lexer.State state) -> p, state
     | _ -> assert false
   in
-  {
-    history; klass;
-    lexer = Lexer.start position state;
+  { history;
+    lexer =
+      (module struct
+         module Lexer = Lexer
+         let instance = Lexer.start position state;
+       end)
   }
-let start (type t) (type s) (klass : s lexer) history =
-  let module Lexer = (val klass) in
-  T (start (module Lexer : S with type state = s and type t = Lexer.t) history)
 
-let position (type s) (type k) (t : (s,k) t') =
-  let module Lexer = (val t.klass) in
-  Lexer.position t.lexer
-let position (T t) = position t
+let position {lexer = (module T)} =
+  T.Lexer.position T.instance
 
-let eof (type s) (type k) (t : (s,k) t') =
-  let module Lexer = (val t.klass) in
-  Lexer.eof t.lexer
-let eof (T t) = eof t
+let eof {lexer = (module T)} =
+  T.Lexer.eof T.instance
 
-let feed (type s) (type t) (l : (s,t) lexer') (t : t) str f =
-  let module Lexer = (val l) in
-  Lexer.feed t str f
+let not_found = Not_found
 
-let feed (T t) str =
+let feed t str =
   let warnings = ref (fst (History.focused t.history)) in
   Parsing_aux.catch_warnings warnings @@ fun () ->
-  let append item =
-    begin match item with
-      | Error (e,l) -> warnings := Raw_lexer.Error (e,l) :: !warnings
-      | _ -> ()
-    end;
+  let module T = (val t.lexer) in
+  let module Lexer = T.Lexer in
+  let token startp item endp state =
+    let state = match state with
+      | None -> not_found
+      | Some state -> Lexer.State state
+    in
+    let item = Valid (startp,item,endp,state) in
     t.history <- History.insert (!warnings, item) t.history
   in
-  feed t.klass t.lexer str append
+  let error err loc =
+    warnings := Raw_lexer.Error (err,loc) :: !warnings;
+    t.history <- History.insert (!warnings, Error (err,loc)) t.history
+  in
+  Lexer.feed T.instance str ~token ~error
 
 module Caml_lexer = struct
   type at_beginning = bool
   type state = at_beginning * Raw_lexer.keywords
+  exception State of state
   let from_keywords s = true, s
 
   let equal (b1,kw1) (b2,kw2) = b1 = b2 && kw1 == kw2
@@ -170,7 +176,8 @@ module Caml_lexer = struct
     | true, kw -> t.state <- false, kw
     | _ -> ()
 
-  let feed t str append =
+  let feed t str ~token ~error =
+    let open Lexing in
     t.refill := Some str;
     let rec aux = function
       (* Lexer interrupted, there is data to refill or eof reached: continue. *)
@@ -185,20 +192,14 @@ module Caml_lexer = struct
         ()
       | Raw_lexer.Return Raw_parser.EOF ->
         on_append t;
-        append (Valid (t.lexbuf.Lexing.lex_start_p,
-                       Raw_parser.EOF,
-                       t.lexbuf.Lexing.lex_curr_p,
-                       None));
+        token t.lexbuf.lex_start_p Raw_parser.EOF t.lexbuf.lex_curr_p None;
         t.pushed_eof <- true
-      | Raw_lexer.Return token ->
+      | Raw_lexer.Return tok ->
         on_append t;
-        append (Valid (t.lexbuf.Lexing.lex_start_p,
-                       token,
-                       t.lexbuf.Lexing.lex_curr_p,
-                       Some t.state));
+        token t.lexbuf.lex_start_p tok t.lexbuf.lex_curr_p (Some t.state);
         continue ()
       | Raw_lexer.Fail (e,l) ->
-        append (Error (e,l));
+        error e l;
         continue ()
     and continue () =
       aux (Raw_lexer.token t.lex_state t.lexbuf)
@@ -216,12 +217,13 @@ module Caml_lexer = struct
 
 end
 
-let caml_lexer : _ lexer = (module Caml_lexer)
+type caml_lex = Caml_lexer.state
+let from_keywords = Caml_lexer.from_keywords
+let caml_lexer : caml_lex lexer = (module Caml_lexer)
 
 (* Miscellaneous functions *)
 
-let item_equal (type a) (lexer : a lexer) (it1 : a item) (it2 : a item) =
-  let module Lexer = (val lexer) in
+let same_token (it1 : item) (it2 : item) =
   match it1, it2 with
   | Valid (s1,t1,e1,_), Valid (s2,t2,e2,_) ->
     Lexing.compare_pos s1 s2 = 0 &&

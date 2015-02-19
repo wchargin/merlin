@@ -431,15 +431,15 @@ module Buffer : sig
 
   val project: t -> Project.t
 
-  val lexer: t -> (exn list * Lexer.Caml_lexer.state Lexer.item) History.t
-  val update: t -> (exn list * Lexer.Caml_lexer.state Lexer.item) History.t -> [`Nothing_done | `Updated]
-  val start_lexing: ?pos:Lexing.position -> t -> Lexer.Caml_lexer.state Lexer.t
+  val lexer: t -> (exn list * Lexer.item) History.t
+  val update: t -> (exn list * Lexer.item) History.t -> [`Nothing_done | `Updated]
+  val start_lexing: ?pos:Lexing.position -> t -> Lexer.t
   val lexer_errors: t -> exn list
 
   val parser: t -> Parser.t
   val parser_errors: t -> exn list
   val recover: t -> Recover.t
-  val recover_history : t -> (Lexer.Caml_lexer.state Lexer.item * Recover.t) History.t
+  val recover_history : t -> (Lexer.item * Recover.t) History.t
 
   val typer: t -> Typer.t
 
@@ -459,8 +459,8 @@ end = struct
     mutable project : Project.t;
     mutable stamp : bool ref;
     mutable keywords: Raw_lexer.keywords;
-    mutable lexer: (exn list * Lexer.Caml_lexer.state Lexer.item) History.t;
-    mutable recover: (Lexer.Caml_lexer.state Lexer.item * Recover.t) History.t;
+    mutable lexer: (exn list * Lexer.item) History.t;
+    mutable recover: (Lexer.item * Recover.t) History.t;
     mutable typer: Typer.t;
   }
 
@@ -515,7 +515,7 @@ end = struct
     in
     let keywords = Project.keywords project in
     let lexer = Lexer.empty ~filename
-        (Lexer.Caml_lexer.from_keywords keywords) in
+        Lexer.caml_lexer (Lexer.from_keywords keywords) in
     let stamp = ref true in
     Project.setup project;
     {
@@ -560,8 +560,7 @@ end = struct
   let update t l =
     t.lexer <- l;
     let strong_check (_,token) (token',_) = token == token' in
-    let weak_check (_,token) (token',_) =
-      Lexer.item_equal Lexer.caml_lexer token token' in
+    let weak_check (_,token) (token',_) = Lexer.same_token token token' in
     let init token = initial_step t.kind token in
     let strong_fold (_,token) (_,recover) = token, Recover.fold token recover in
     let weak_update (_,token) (_,recover) = (token,recover) in

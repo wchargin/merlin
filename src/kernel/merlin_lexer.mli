@@ -41,51 +41,54 @@
    EOF.
 *)
 
+type lexer_state = exn
+
 (* Lexing step *)
-type 'state item =
-  | Valid of Lexing.position * Raw_parser.token * Lexing.position * 'state option
+type item =
+  | Valid of Lexing.position * Raw_parser.token * Lexing.position * lexer_state
   | Error of Raw_lexer.error * Location.t
 
 module type S = sig
   type state
-  val equal: state -> state -> bool
+  exception State of state
 
   type t
   val start: Lexing.position -> state -> t
   val seek: t -> Lexing.position -> unit
-  val feed: t -> string -> (state item -> unit) -> unit
+  val feed: t -> string ->
+    token:(Lexing.position -> Raw_parser.token -> Lexing.position -> state option -> unit) ->
+    error:(Raw_lexer.error -> Location.t -> unit) ->
+    unit
   val position: t -> Lexing.position
   val eof: t -> bool
 end
 type 'state lexer = (module S with type state = 'state)
 
 (** Create an empty list new lexer *)
-val empty: filename:string -> 'state -> (exn list * 'state item) History.t
+val empty: filename:string -> 'state lexer -> 'state -> (exn list * item) History.t
 
 (** Prepare for lexing.
     Returns the start position (end position of last valid token), and a
     lexing function that will append at most one token to the history at each
     call. *)
-type 'state t
-val history: 'state t -> (exn list * 'state item) History.t
-val start: 'state lexer -> (exn list * 'state item) History.t -> 'state t
-val position: 'state t -> Lexing.position
-val feed: 'state t -> string -> unit
-val eof: 'state t -> bool
+type t
+val history: t -> (exn list * item) History.t
+val start: _ lexer -> (exn list * item) History.t -> t
+val position: t -> Lexing.position
+val feed: t -> string -> unit
+val eof: t -> bool
 
 (* Some lexers *)
 
-module Caml_lexer : sig
-  include S
-  val from_keywords : Raw_lexer.keywords -> state
-end
-val caml_lexer : Caml_lexer.state lexer
+type caml_lex
+val from_keywords : Raw_lexer.keywords -> caml_lex
+val caml_lexer : caml_lex lexer
 
 (* Miscellaneous functions *)
 
-val item_equal: 'state lexer -> 'state item -> 'state item -> bool
-val item_start: _ item -> Lexing.position
-val item_end: _ item -> Lexing.position
+val same_token: item -> item -> bool
+val item_start: item -> Lexing.position
+val item_end: item -> Lexing.position
 
-val reconstruct_identifier: ?for_locate:bool -> (exn list * _ item) History.t -> string Location.loc list
+val reconstruct_identifier: ?for_locate:bool -> (exn list * item) History.t -> string Location.loc list
 val identifier_suffix: string Location.loc list -> string Location.loc list

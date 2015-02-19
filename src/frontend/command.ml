@@ -35,7 +35,7 @@ open Merlin_lib
 (* Gymnastic to hide lexer state in an existential variable *)
 type 'lexer buffer = {
   buffer : Buffer.t;
-  mutable lexer : Lexer.Caml_lexer.state Lexer.t option;
+  mutable lexer : Lexer.t option;
   mutable mark : Parser.frame option;
 }
 
