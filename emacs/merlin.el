@@ -1166,22 +1166,22 @@ errors in the fringe.  If VIEW-ERRORS-P is non-nil, display a count of them."
          ;; labels
          (labels (and application (cdr (assoc 'labels application)))))
     (setq labels (merlin--completion-prepare-labels labels suffix))
-    ; DWIM completion
+    ;; DWIM completion
     (when (and merlin-completion-dwim (not labels) (not entries))
       (setq data (merlin-send-command `(expand prefix ,ident at ,pos)))
       (setq entries (cdr (assoc 'entries data)))
       (setq-local merlin--dwimed t)
       (setq prefix ""))
-    ; Concat results
+    ;; Concat results
     (let ((result (append labels entries)))
       (if expected-ty
         (mapcar (lambda (x) (append x `((argument_type . ,expected-ty))))
                 result)
         result))))
 
-; Here for backward compatibility: this function is called by external code, the
-; format of merlin--completion-data changed, this function translates it back to
-; the old format.
+;; Here for backward compatibility: this function is called by external code, the
+;; format of merlin--completion-data changed, this function translates it back to
+;; the old format.
 (defun merlin-completion-data (ident)
   "Backward compatible version of merlin--completion-data"
   (let ((entries (merlin--completion-data ident))
@@ -1192,15 +1192,6 @@ errors in the fringe.  If VIEW-ERRORS-P is non-nil, display a count of them."
                     (cdr (assoc 'kind entry))
                     (cdr (assoc 'info entry))))
             entries)))
-
-(defun merlin--completion-lookup (string state)
-  "Lookup the entry STRING inside the completion table."
-  (let ((ret (assoc string merlin-completion-annotation-table)))
-    (if ret (message "%s%s" (car ret) (cdr ret)))))
-
-(defun merlin--completion-annotate (candidate)
-  "Retrieve the annotation for candidate CANDIDATE in `merlin-completion-annotate-table'."
-  (cdr (assoc candidate merlin-completion-annotation-table)))
 
 (defun merlin--completion-bounds ()
   "Returns a pair (start . end) of the content to complete"
@@ -1847,8 +1838,6 @@ Returns the position."
     ; if there is not yet a merlin process
     (when (merlin-process-dead-p instance)
       (merlin-start-process merlin-default-flags conf))
-    (add-hook 'completion-at-point-functions
-              #'merlin-completion-at-point nil 'local)
     (add-to-list 'after-change-functions 'merlin--sync-edit)))
 
 (defun merlin-can-handle-buffer ()
