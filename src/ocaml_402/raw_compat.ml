@@ -77,9 +77,6 @@ let sig_item_idns =
 
 let include_idents l = List.map sig_item_idns l
 
-let lookup_constructor = Env.lookup_constructor
-let lookup_label       = Env.lookup_label
-
 let fold_types f id env acc =
   Env.fold_types (fun s p (decl,descr) acc -> f s p decl acc) id env acc
 
@@ -87,21 +84,12 @@ let fold_constructors f id env acc =
   Env.fold_constructors
     (fun constr acc -> f constr.Types.cstr_name constr acc)
     id env acc
-let fold_labels = Env.fold_labels
 
-let exp_open_env = function
-  | Typedtree.Texp_open (_,_,_,env) -> env
-  | _ -> assert false
-
-let extract_functor_arg m = m
-
-let extract_modtype_declaration m = m.Types.mtd_type
-let extract_module_declaration m = m.Types.md_type
 
 let lookup_module name env =
   let path = Env.lookup_module ~load:true name env in
   let md = Env.find_module path env in
-  path, extract_module_declaration md
+  path, md.Types.md_type
 
 let lookup_modtype name env =
   let path, mdtype = Env.lookup_modtype name env in
@@ -158,8 +146,6 @@ let rec last_ident =
   | Env_empty -> raise Not_found
   | Env_open (s,_) | Env_aliasmap (s,_) -> last_ident s
 
-let id_of_constr_decl c = c.Types.cd_id
-
 let add_hidden_signature env sign =
   let add_item env comp =
     match comp with
@@ -193,7 +179,7 @@ let rec signature_loc =
   let rec mod_loc = function
     | Mty_ident _ -> None
     | Mty_functor (_,m1,m2) ->
-      begin match extract_functor_arg m1 with
+      begin match m1 with
       | Some m1 -> union_loc_opt (mod_loc m1) (mod_loc m2)
       | None -> mod_loc m2
       end
@@ -212,9 +198,9 @@ let rec signature_loc =
   | Sig_value (_,v)    -> Some v.val_loc
   | Sig_type (_,t,_)   -> Some t.type_loc
   | Sig_typext (_,e,_) -> Some e.ext_loc
-  | Sig_module (_,m,_) -> mod_loc (extract_module_declaration m)
+  | Sig_module (_,m,_) -> mod_loc m.Types.md_type
   | Sig_modtype (_,m) ->
-    begin match extract_modtype_declaration m with
+    begin match m.Types.mtd_type with
     | Some m -> mod_loc m
     | None -> None
     end
@@ -283,8 +269,6 @@ let dest_tstr_eval str =
   match str.str_items with
   | [ { str_desc = Tstr_eval (exp,[]) }] -> exp
   | _ -> failwith "unhandled expression"
-
-let full_scrape = Env.scrape_alias
 
 let rec subst_patt initial ~by patt =
   let f = subst_patt initial ~by in
@@ -426,5 +410,3 @@ let optional_label_sugar = function
          && id.Location.txt = Longident.Lident "Some" ->
     Some e
   | _ -> None
-
-let pat_attributes p = p.Typedtree.pat_attributes

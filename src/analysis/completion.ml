@@ -322,7 +322,7 @@ let get_candidates ?get_doc ?target_type prefix path kind ~validate env =
 
       | `Modules ->
         Env.fold_modules (fun name path v candidates ->
-          let v = Raw_compat.extract_module_declaration v in
+          let v = v.Types.md_type in
           if not @@ validate `Uident `Mod name then candidates else
           make_weighted_candidate ~exact:(name = prefix) name ~path (`Mod v)
           :: candidates
@@ -336,7 +336,7 @@ let get_candidates ?get_doc ?target_type prefix path kind ~validate env =
         ) path env []
 
       | `Labels ->
-        Raw_compat.fold_labels (fun ({Types.lbl_name = name} as l) candidates ->
+        Env.fold_labels (fun ({Types.lbl_name = name} as l) candidates ->
           if not (validate `Lident `Label name) then candidates else
             make_weighted_candidate ~exact:(name = prefix) name (`Label l)
             :: candidates
@@ -409,7 +409,7 @@ let complete_prefix ?get_doc ?target_type ~env ~prefix ~is_label buffer node =
       in
       List.fold_left ~f:add_completions order ~init:[]
     else
-      Raw_compat.fold_labels (fun ({Types.lbl_name = name} as l) candidates ->
+      Env.fold_labels (fun ({Types.lbl_name = name} as l) candidates ->
         if not (valid `Label name) then candidates else
           make_candidate ?get_doc ~exact:(name = prefix) name (`Label l)
           :: candidates
