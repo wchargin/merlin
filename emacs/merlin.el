@@ -368,11 +368,18 @@ return DEFAULT or the value associated to KEY."
   (buffer-local-value 'merlin--process-owner (merlin-process-buffer instance-name)))
 
 (defun merlin--process-busy (&optional instance-name)
+  "Nil if no synchronous work is being done, sexp representation of
+synchronous command being processed by merlin otherwise."
   (buffer-local-value 'merlin--process-busy (merlin-process-buffer instance-name)))
 
 (put 'merlin-cancelled
      'error-conditions
      '(merlin-cancelled))
+
+(defun merlin--process-idle ()
+  "Non-nil iff nothing (synchronous nor asynchronous) is being done by merlin"
+  (tq-queue-empty
+    (buffer-local-value 'merlin-process-queue (merlin-process-buffer))))
 
 (defun merlin--process-busy-set (value &optional instance-name)
   (with-current-buffer (merlin-process-buffer instance-name)
@@ -887,41 +894,33 @@ may be nil, in that case the current cursor of merlin is used."
 (defun merlin--after-save ()
   (when (merlin-error-after-save) (merlin-error-check)))
 
-(defun merlin-error-prev (&optional no-async)
+(defun merlin-error-prev ()
   "Jump back to previous error."
   (interactive)
+  (if (= merlin--dirty-point (point-max))
+      (when (merlin--process-idle)
+        (merlin--error-check-async))
+    (merlin--error-check nil))
   (let ((err (merlin--error-prev-cycle)))
-    (unless err
-      (merlin--acquire-buffer)
-      (merlin--error-check nil)
-      (setq err (merlin--error-prev-cycle)))
     (unless (or err merlin-erroneous-buffer) (message "No errors"))
     (when err
       (goto-char (car err))
       (message "%s" (cdr (assoc 'message (cdr err))))
-      (merlin-highlight (cdr (assoc 'bounds (cdr err))) 'next-error))
-    (when (and err (not no-async)
-               (tq-queue-empty
-                (buffer-local-value 'merlin-process-queue (merlin-process-buffer))))
-      (merlin--error-check-async err 'merlin-error-prev))))
+      (merlin-highlight (cdr (assoc 'bounds (cdr err))) 'next-error))))
 
-(defun merlin-error-next (&optional no-async)
+(defun merlin-error-next ()
   "Jump to next error."
   (interactive)
+  (if (= merlin--dirty-point (point-max))
+      (when (merlin--process-idle)
+        (merlin--error-check-async))
+    (merlin--error-check nil))
   (let ((err (merlin--error-next-cycle)))
-    (unless err
-      (merlin--acquire-buffer)
-      (merlin--error-check nil)
-      (setq err (merlin--error-next-cycle)))
     (unless (or err merlin-erroneous-buffer) (message "No errors"))
     (when err
       (goto-char (car err))
       (message "%s" (cdr (assoc 'message (cdr err))))
-      (merlin-highlight (cdr (assoc 'bounds (cdr err))) 'next-error))
-    (when (and err (not no-async)
-               (tq-queue-empty
-                (buffer-local-value 'merlin-process-queue (merlin-process-buffer))))
-      (merlin--error-check-async err 'merlin-error-next))))
+      (merlin-highlight (cdr (assoc 'bounds (cdr err))) 'next-error))))
 
 (defun merlin--error-warning-p (msg)
   "Tell if the message MSG is a warning."
@@ -984,15 +983,13 @@ form. Do display of error list."
       overlay))
   errors)
 
-(defun merlin--error-check-async (&optional previous-err err-cmd)
+(defun merlin--error-check-async ()
   (merlin/sync-to-end)
-  (lexical-let ((previous-err previous-err)
-                (err-cmd err-cmd))
-    (merlin-send-command-async
-     'errors
-     (lambda (errors)
-       (merlin-error-reset)
-       (let ((no-loc (remove-if (lambda (e) (assoc 'start e)) errors)))
+  (merlin-send-command-async
+    'errors
+    (lambda (errors)
+      (merlin-error-reset)
+      (let ((no-loc (remove-if (lambda (e) (assoc 'start e)) errors)))
         (setq errors (remove-if-not (lambda (e) (assoc 'start e)) errors))
         (unless merlin-report-warnings
           (setq errors (remove-if (lambda (e)
@@ -1001,10 +998,7 @@ form. Do display of error list."
         (setq merlin-erroneous-buffer (or errors no-loc))
         (dolist (e no-loc)
           (message "%s" (cdr (assoc 'message e))))
-        (merlin-transform-display-errors errors))
-        (when (and merlin-erroneous-buffer err-cmd previous-err (eq (point) (car previous-err))
-                   (not (remove nil (mapcar 'merlin--overlay-pending-error (overlays-at (point))))))
-          (funcall err-cmd t))))))
+        (merlin-transform-display-errors errors)))))
 
 (defun merlin--error-check (view-errors-p)
   "Check for errors.
