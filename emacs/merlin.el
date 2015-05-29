@@ -1039,10 +1039,10 @@ errors in the fringe.  If VIEW-ERRORS-P is non-nil, display a count of them."
     (merlin-transform-display-errors errors)
     (when view-errors-p
       (if merlin-erroneous-buffer
-          (message "No errors")
-        (message "(%d pending errors, use %s to jump)"
-                 (length errors)
-                 (substitute-command-keys "\\[merlin-error-next]"))))))
+          (message "(%d pending errors, use %s to jump)"
+                   (length errors)
+                   (substitute-command-keys "\\[merlin-error-next]"))
+        (message "No errors")))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ACTION WHEN IDLING ACTION ;;
