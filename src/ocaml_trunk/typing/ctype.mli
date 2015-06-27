@@ -110,6 +110,8 @@ val instance: ?partial:bool -> Env.t -> type_expr -> type_expr
            partial=true  -> newty2 ty.level Tvar for non generic subterms *)
 val instance_def: type_expr -> type_expr
         (* use defaults *)
+val generic_instance: ?partial:bool -> Env.t -> type_expr -> type_expr
+        (* Same as instance, but new nodes at generic_level *)
 val instance_list: Env.t -> type_expr list -> type_expr list
         (* Take an instance of a list of type schemes *)
 val instance_constructor:
@@ -243,7 +245,7 @@ val cyclic_abbrev: Env.t -> Ident.t -> type_expr -> bool
 val is_contractive: Env.t -> type_expr -> bool
 val normalize_type: Env.t -> type_expr -> unit
 
-val closed_schema: type_expr -> bool
+val closed_schema: Env.t -> type_expr -> bool
         (* Check whether the given type scheme contains no non-generic
            type variables *)
 
