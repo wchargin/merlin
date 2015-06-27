@@ -134,7 +134,8 @@ let summary_prev =
   | Env_type (s,_,_) | Env_extension (s,_,_)
   | Env_module (s,_,_) | Env_modtype (s,_,_)
   | Env_class (s,_,_) | Env_cltype (s,_,_)
-  | Env_functor_arg (s,_) ->
+  | Env_functor_arg (s,_)
+  | Env_aliasmap (s,_) ->
     Some s
 
 let summary_open_path = function
@@ -160,7 +161,7 @@ let signature_of_summary =
   | Env_modtype (_,i,m)    -> Some (Sig_modtype (i,m))
   | Env_class (_,i,c)      -> Some (Sig_class (i,c,Trec_not))
   | Env_cltype (_,i,c)     -> Some (Sig_class_type (i,c,Trec_not))
-  | Env_open _ | Env_empty | Env_functor_arg _ -> None
+  | Env_open _ | Env_empty | Env_functor_arg _ | Env_aliasmap _ -> None
 
 let rec last_ident =
   let open Env in
@@ -174,7 +175,7 @@ let rec last_ident =
   | Env_cltype (_,id,_)
   | Env_functor_arg (_,id) -> id
   | Env_empty -> raise Not_found
-  | Env_open (s,_) -> last_ident s
+  | Env_open (s,_) | Env_aliasmap (s,_) -> last_ident s
 
 let id_of_constr_decl c = c.Types.cd_id
 
