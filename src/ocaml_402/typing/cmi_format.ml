@@ -100,3 +100,8 @@ let () =
       | Error err -> Some (Location.error_of_printer_file report_error err)
       | _ -> None
     )
+
+(* merlin: hack for supporting < 4.02 *)
+let read_crcs ic =
+  let crcs : (string * Digest.t option) list = input_value ic in
+  crcs, (match crcs with (_, crc) :: _ -> crc | _ -> None)

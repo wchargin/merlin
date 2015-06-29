@@ -542,3 +542,8 @@ let file_id_check a b =
     a.st_dev = b.st_dev
   | Some _, None | None, Some _ -> false
 
+let header_buf = String.create Marshal.header_size
+
+let skip_value ic =
+  really_input ic header_buf 0 Marshal.header_size;
+  seek_in ic (pos_in ic + Marshal.data_size header_buf 0)

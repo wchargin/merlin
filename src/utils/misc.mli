@@ -246,3 +246,7 @@ val file_id_check: file_id -> file_id -> bool
 
 val file_id: string -> file_id
 (** [file_id filename] computes an id for the current contents of [filename] *)
+
+val skip_value : in_channel -> unit
+(** [skip_value ic] is equivalent to [ignore (input_value ic)], but should be
+    more efficient. *)

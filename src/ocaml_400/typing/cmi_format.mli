@@ -40,3 +40,5 @@ exception Error of error
 open Format
 
 val report_error: formatter -> error -> unit
+
+val read_crcs : in_channel -> (string * Digest.t) list * Digest.t option

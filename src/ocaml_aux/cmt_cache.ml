@@ -50,14 +50,55 @@ type trie = (Location.t * namespace * node) list String.Map.t
 
 type cmt_item = {
   cmt_infos : Cmt_format.cmt_infos ;
+  cmi_infos : Cmi_format.cmi_infos option;
   mutable location_trie : trie ;
 }
 
 include File_cache.Make (struct
   type t = cmt_item
 
-  let read file = {
-    cmt_infos = Cmt_format.read_cmt file ;
-    location_trie = String.Map.empty ;
-  }
+  let read file =
+    match Cmt_format.read file with
+    | cmi_infos, Some cmt_infos ->
+      {
+        cmt_infos ; cmi_infos ;
+        location_trie = String.Map.empty ;
+      }
+    | _, None -> raise Cmt_format.(Error (Not_a_typedtree file))
 end)
+
+let read_cmi name =
+  let cmti = Filename.chop_extension name ^ ".cmti" in
+  try
+    if not (Sys.file_exists cmti) then
+      raise Not_found;
+    let ic = open_in_bin name in
+    try
+      let magic_len = String.length Config.cmi_magic_number in
+      let buffer = String.create magic_len in
+      really_input ic buffer 0 magic_len;
+      if buffer <> Config.cmi_magic_number then
+        raise Not_found;
+      Misc.skip_value ic; (* string * Types.signature *);
+      let crcs, crc = Cmi_format.read_crcs ic in
+      let crc = match crc with
+        | Some crc -> crc
+        | None -> raise Not_found
+      in
+      let cached = read cmti in
+      match cached with
+      | {cmt_infos = {Cmt_format. cmt_interface_digest = Some crc';
+                      cmt_annots = Cmt_format.Interface sg};
+         cmi_infos = Some cmi_infos}
+        when crc = crc' -> {cmi_infos with Cmi_format.
+                                        cmi_crcs = crcs;
+                                        cmi_sign = sg.Typedtree.sig_type}
+      | _ ->
+        raise Not_found
+    with exn ->
+      close_in_noerr ic;
+      raise exn
+  with Not_found ->
+    Cmi_format.read_cmi name
+
+let () = Cmi_cache.read_cmi := read_cmi

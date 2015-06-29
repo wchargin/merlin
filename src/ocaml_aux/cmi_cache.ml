@@ -31,10 +31,12 @@ type cmi_item = {
   cmi_env_store: exn ref;
 }
 
+let read_cmi = ref Cmi_format.read_cmi
+
 include File_cache.Make (struct
   type t = cmi_item
   let read name = {
-    cmi_infos = Cmi_format.read_cmi name;
+    cmi_infos = !read_cmi name;
     cmi_env_store = ref Not_found;
   }
 end)
