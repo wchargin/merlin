@@ -675,7 +675,7 @@ the error message otherwise print a generic error message."
   reported. If they have the same integer priority, one is executed.
   Otherwise the one with the lowest integer is cancelled.")
 
-(defun merlin-send-command (command &optional callback-if-exn)
+(defun merlin/send-command (command &optional callback-if-exn)
   "Send COMMAND (with arguments ARGS) to merlin and returns the result."
   (let ((promise (merlin/send-command-async
                             command (lambda (data) data) callback-if-exn)))
