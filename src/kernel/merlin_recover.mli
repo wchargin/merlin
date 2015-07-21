@@ -39,5 +39,5 @@ val exns : t -> exn list
 
 val comments : t -> (string * Location.t) list
 
-val dump : t -> Std.json
-val dump_recoverable : t -> Std.json
+val dump : t -> Json.json
+val dump_recoverable : t -> Json.json

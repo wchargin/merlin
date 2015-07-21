@@ -104,6 +104,7 @@ SOURCES = \
 	$(TYPER)/browseT.ml               \
 	$(TYPER)/tail_analysis.mli        \
 	$(TYPER)/tail_analysis.ml         \
+	src/utils/json.ml									\
 	src/ocaml_aux/parsing_aux.mli     \
 	src/ocaml_aux/parsing_aux.ml      \
 	src/kernel/dot_merlin.mli         \
@@ -199,6 +200,8 @@ SOURCES = \
 	src/frontend/IO_sexp.ml           \
 	src/frontend/command.mli          \
 	src/frontend/command.ml           \
+	src/frontend/context.mli          \
+	src/frontend/context.ml           \
 	src/frontend/ocamlmerlin.ml
 
 PACKS = str findlib yojson unix

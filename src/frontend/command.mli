@@ -28,8 +28,7 @@
 
 open Merlin_lib
 
-type state
+val sync_kind : _ Protocol.command -> [`None | `Cursor | `Full | `Any]
 
-val new_state : unit -> state
-
-val dispatch : state -> 'a Protocol.request -> 'a
+val dispatch
+  : Buffer.t -> verbosity:int -> cursor:Lexing.position -> 'a Protocol.command -> 'a

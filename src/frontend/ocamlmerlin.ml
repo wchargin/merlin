@@ -91,54 +91,56 @@ let signal behavior =
   with Invalid_argument "Sys.signal: unavailable signal" ->
     Sys.Signal_default
 
-(*let refresh_state_on_signal state f =
-  let previous =
-    signal (Sys.Signal_handle (fun _ ->
-        try state := fst (State.quick_refresh_modules !state)
-        with _ -> ()
-      ))
-  in
-  Misc.try_finally f (fun () -> ignore (signal previous))*)
-
 let section = Logger.section "main"
 
-let rec on_read state ~timeout fd =
+let rec on_read ~timeout fd =
   try match Unix.select [fd] [] [] timeout with
     | [], [], [] ->
-      if Command.dispatch state Protocol.Idle_job then
-        on_read state ~timeout:0.0 fd
-      else
-        on_read state ~timeout:(-1.0) fd
+      on_read ~timeout:(-1.0) fd
+      (*if Command.dispatch state Protocol.Idle_job
+      then on_read state ~timeout:0.0 fd
+      else on_read state ~timeout:(-1.0) fd*)
     | _, _, _ -> ()
   with
   | Unix.Unix_error (Unix.EINTR, _, _) ->
-    on_read state ~timeout fd
+    on_read ~timeout fd
   | exn -> Logger.error section
              ~title:"on_read" (Printexc.to_string exn)
 
 let main_loop () =
-  let state = Command.new_state () in
   let input, output as io =
-    IO.(lift (make ~on_read:(on_read state ~timeout:0.050)
+    IO.(lift (make ~on_read:(on_read ~timeout:0.050)
                 ~input:Unix.stdin ~output:Unix.stdout)) in
   try
+    let message_store = ref [] in
+    Logger.with_editor message_store @@ fun () ->
     while true do
-      let state, answer =
-        let state' = ref state in
+      let result =
         try
-          let Protocol.Request request =
-            (*refresh_state_on_signal state' (fun () ->*) Stream.next input (* ) *)
-          in
-          (*let state = State.validate_parser !state' in*)
-          let response = Command.dispatch state request in
-          state,
-          Protocol.Return (request, response)
+          let Protocol.Request (context, cursor, synchronization, command) =
+            Stream.next input in
+          match command with
+          | Protocol.Clear ->
+            Context.clear context;
+            Protocol.Return (Protocol.Clear, ())
+          | command ->
+            let context = Context.get context in
+            let response = Command.dispatch
+                context
+                ~verbosity:0(*FIXME*)
+                ~cursor
+                command
+            in
+            Protocol.Return (command, response)
         with
         | Stream.Failure as exn -> raise exn
-        | exn -> !state', Protocol.Exception exn
+        | exn -> Protocol.Exception exn
       in
-      try output answer
-       with exn -> output (Protocol.Exception exn);
+      let messages = List.rev !message_store in
+      message_store := [];
+      try output {Protocol. messages; result}
+      with exn -> output {Protocol. messages;
+                          result = Protocol.Exception exn};
     done
   with Stream.Failure -> ()
 

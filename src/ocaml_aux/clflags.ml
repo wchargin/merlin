@@ -59,6 +59,23 @@ let copy t = {t with
               std_include = ref !(t.std_include);
              }
 
+let reset t ~from =
+  t.include_dirs          := !(from.include_dirs);
+  t.std_include           := !(from.std_include);
+  t.fast                  <- from.fast;
+  t.classic               <- from.classic;
+  t.principal             <- from.principal;
+  t.real_paths            <- from.real_paths;
+  t.timed_logs            <- from.timed_logs;
+  t.recursive_types       <- from.recursive_types;
+  t.strict_sequence       <- from.strict_sequence;
+  t.applicative_functors  <- from.applicative_functors;
+  t.unsafe_string         <- from.unsafe_string;
+  t.nopervasives          <- from.nopervasives;
+  t.strict_formats        <- from.strict_formats;
+  t.open_modules          <- from.open_modules;
+  t.ppx                   <- from.ppx
+
 let initial = fresh ()
 let set = ref initial
 

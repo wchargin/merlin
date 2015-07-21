@@ -634,7 +634,7 @@ let inspect_context browse path pos =
     | _ ->
       Some Unknown
 
-let from_string ~project ~env ~local_defs ~pos switch path =
+let from_string ~config ~env ~local_defs ~pos switch path =
   let browse = Browse.of_typer_contents local_defs in
   let lazy_trie = lazy (Typedtrie.of_browses ~local_buffer:true browse) in
   let lid = Longident.parse path in
@@ -645,9 +645,9 @@ let from_string ~project ~env ~local_defs ~pos switch path =
   | Some ctxt ->
     info_log "looking for the source of '%s' (prioritizing %s files)" path
       (match switch with `ML -> ".ml" | `MLI -> ".mli") ;
-    Fluid.let' sources_path (Project.source_path project) @@ fun () ->
-    Fluid.let' cfg_cmt_path (Project.cmt_path project) @@ fun () ->
-    Fluid.let' loadpath     (Project.cmt_path project) @@ fun () ->
+    Fluid.let' sources_path (Config.source_path config) @@ fun () ->
+    Fluid.let' cfg_cmt_path (Config.cmt_path config) @@ fun () ->
+    Fluid.let' loadpath     (Config.cmt_path config) @@ fun () ->
     match
       from_longident ~pos ~env ~lazy_trie ctxt switch lid
     with
@@ -668,13 +668,13 @@ let from_string ~project ~env ~local_defs ~pos switch path =
         )
 
 
-let get_doc ~project ~env ~local_defs ~comments ~pos source =
+let get_doc ~config ~env ~local_defs ~comments ~pos source =
   let browse = Browse.of_typer_contents local_defs in
   let lazy_trie = lazy (Typedtrie.of_browses ~local_buffer:true browse) in
   fun path ->
-  Fluid.let' sources_path (Project.source_path project) @@ fun () ->
-  Fluid.let' cfg_cmt_path (Project.cmt_path project) @@ fun () ->
-  Fluid.let' loadpath     (Project.cmt_path project) @@ fun () ->
+  Fluid.let' sources_path (Config.source_path config) @@ fun () ->
+  Fluid.let' cfg_cmt_path (Config.cmt_path config) @@ fun () ->
+  Fluid.let' loadpath     (Config.cmt_path config) @@ fun () ->
   Fluid.let' last_location Location.none @@ fun () ->
   match
     match path with

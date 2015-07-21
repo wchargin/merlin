@@ -8,4 +8,4 @@ val union: t -> t -> t
 
 val command_line: t -> string list
 
-val dump : t -> Std.json
+val dump : t -> Json.json

@@ -182,7 +182,7 @@ let feed_recover ~record_comment original (s,tok,e as input) zipper =
   Logger.infojf section ~title:"feed_recover candidates"
     (fun (pos,candidates) ->
       `Assoc [
-        "position", Lexing.json_of_position pos;
+        "position", Json.of_position pos;
         "candidates", `List (List.map ~f:dump_candidate candidates)
       ])
     (s,candidates);

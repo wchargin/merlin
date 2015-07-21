@@ -40,6 +40,7 @@ val initial : set
 
 val fresh : unit -> set
 val copy : set -> set
+val reset : set -> from:set -> unit
 
 (* Current state *)
 val set : set ref

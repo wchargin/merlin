@@ -32,7 +32,7 @@ open Std
     (* Untyped stream *)
 type low_io = Json.json Stream.t * (Json.json -> unit)
     (* Protocol-typed stream *)
-type io = Protocol.a_request Stream.t * (Protocol.response -> unit)
+type io = Protocol.request Stream.t * (Protocol.response -> unit)
 
 (* Select between different serialization protocols *)
 type io_maker =
@@ -51,4 +51,3 @@ val select_frontend : string -> unit
 
 (* Misc *)
 val invalid_arguments : unit -> 'a
-val with_location : ?skip_none:bool -> Location.t -> (string * Json.json) list -> Json.json

@@ -190,7 +190,7 @@ let all_constructor_occurrences ({t_env = env},d) t =
   in
   aux [] t
 
-let annotate_tail_calls ts : (t * Protocol.is_tail_position) list =
+let annotate_tail_calls ts : (t * Protocol.Type_enclosing.is_tail_position) list =
   let open BrowseT in
   let is_one_of candidates t = List.mem t.t_node ~set:candidates in
   let find_entry_points candidates t =

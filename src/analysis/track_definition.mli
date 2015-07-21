@@ -31,7 +31,7 @@ open Merlin_lib
 val section: Logger.section
 
 val from_string
-  : project:Project.t
+  : config:Config.t
   -> env:Env.t
   -> local_defs:(Typer.content * _) list
   -> pos:Lexing.position
@@ -44,7 +44,7 @@ val from_string
       | `At_origin ]
 
 val get_doc
-  : project:Merlin_lib.Project.t
+  : config:Config.t
   -> env:Env.t
   -> local_defs:(Typer.content * _) list
   -> comments:(string * Location.t) list

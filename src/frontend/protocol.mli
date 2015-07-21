@@ -29,13 +29,7 @@
 open Std
 open Merlin_lib
 
-type position = Lexing.position
-type cursor_state = {
-  cursor: position;
-  marker: bool;
-}
-
-module Compl : sig
+module Completion : sig
   type entry = {
     name: string;
     kind: [`Value|`Constructor|`Variant|`Label|
@@ -56,131 +50,150 @@ module Compl : sig
              ]
   }
 end
-type completions = Compl.t
 
-type outline = item list
-and item = {
-  outline_name : string ;
-  outline_kind : [`Value|`Constructor|`Label|`Module|`Modtype|`Type|`Exn] ;
-  location : Location.t ;
-  children : outline ;
+module Outline : sig
+  type t = item list
+
+  and item = {
+    name : string ;
+    kind : [`Value|`Constructor|`Label|`Module|`Modtype|`Type|`Exn] ;
+    location : Location.t ;
+    children : t ;
+  }
+end
+
+module Shape : sig
+  type t = {
+    location : Location.t;
+    children : t list;
+  }
+end
+
+module Type_enclosing : sig
+  type is_tail_position = [`No | `Tail_position | `Tail_call]
+
+  type t = {
+    location : Location.t;
+    text : string;
+    is_tail : is_tail_position;
+  }
+end
+
+type context = {
+  path: string;
+  kind: [`ML | `MLI | `Auto];
+  name: string option;
+  config: string list option;
+  stdlib: string option;
 }
 
-type shape = {
-  shape_loc : Location.t;
-  shape_sub : shape list;
-}
+type cursor = Lexing.position
 
-type is_tail_position = [`No | `Tail_position | `Tail_call]
+type synchronization =
+  | Sync_none
+  | Sync_set of string
 
-type _ request =
-  | Tell
-    : [ `Start of position option | `Source of string | `File of string | `Eof | `Marker]
-    -> cursor_state request
+type _ command =
+  | Clear
+    :  unit command
+  | Noop
+    :  unit command
   | Type_expr
-    :  string * position option
-    -> string request
+    :  string
+    -> string command
   | Type_enclosing
-    :  (string * int) option * position
-    -> (Location.t * string * is_tail_position) list request
+    :  (string * int) option
+    -> Type_enclosing.t list command
   | Enclosing
-    :  position
-    -> Location.t list request
+    :  Location.t list command
   | Complete_prefix
-    :  string * position * bool
-    -> completions request
+    :  string * bool
+    -> Completion.t command
   | Expand_prefix
-    :  string * position
-    -> completions request
+    :  string
+    -> Completion.t command
   | Document
-    : string option * position
+    : string option
     -> [ `Found of string
        | `Invalid_context
        | `Not_in_env of string
        | `File_not_found of string
        | `Not_found of string * string option
        | `No_documentation
-       ] request
+       ] command
   | Locate
-    : string option * [ `ML | `MLI ] * position
+    : string option * [ `ML | `MLI ]
     -> [ `Found of string option * Lexing.position
        | `Invalid_context
        | `Not_in_env of string
        | `File_not_found of string
        | `Not_found of string * string option
        | `At_origin
-       ] request
+       ] command
   | Case_analysis
-    : Location.t -> (Location.t * string) request
+    :  Location.t
+    -> (Location.t * string) command
   | Outline
-    :  outline request
+    :  Outline.t command
   | Shape
-    :  Lexing.position -> shape list request
-  | Drop
-    :  cursor_state request
-  | Seek
-    :  [`Marker|`Position|`End|`Before of position|`Exact of position]
-    -> cursor_state request
-  | Boundary
-    :  [`Prev|`Next|`Current] * position
-    -> Location.t option request
-  | Reset
-    :  [`ML | `MLI | `Auto ] * string option * string list option
-    -> cursor_state request
-  | Refresh
-    :  unit request
+    :  Shape.t list command
   | Errors
-    :  Error_report.t list request
+    :  Error_report.t list command
   | Dump
-    :  [`Env of [`Normal|`Full] * position option | `Flags | `Warnings
+    :  [`Env of [`Normal|`Full] | `Flags | `Warnings
        |`Sig|`Parser|`Exn|`Browse|`Recover|`Typer of [`Input|`Output] | `Tokens]
-    -> Json.json request
+    -> Json.json command
   | Which_path
     :  string list
-    -> string request
+    -> string command
   | Which_with_ext
     :  string list
-    -> string list request
-  | Flags
-    : [ `Add of string list | `Clear ]
-    -> [ `Ok | `Failures of (string * exn) list ] request
+    -> string list command
+  | Flags_set
+    :  string list
+    -> [ `Ok | `Failures of (string * exn) list ] command
   | Flags_get
-    :  string list list request
+    :  string list list command
   | Findlib_use
     :  string list
-    -> [`Ok | `Failures of (string * exn) list] request
+    -> [`Ok | `Failures of (string * exn) list] command
   | Findlib_list
-    :  string list request
+    :  string list command
   | Extension_list
     :  [`All|`Enabled|`Disabled]
-    -> string list request
+    -> string list command
   | Extension_set
     :  [`Enabled|`Disabled] * string list
-    -> [`Ok | `Failures of (string * exn) list] request
+    -> [`Ok | `Failures of (string * exn) list] command
   | Path
     :  [`Build|`Source]
      * [`Add|`Rem]
      * string list
-    -> unit request
+    -> unit command
   | Path_reset
-    :  unit request
+    :  unit command
   | Path_list
     :  [`Build|`Source]
-    -> string list request
+    -> string list command
   | Project_get
-    :  (string list * [`Ok | `Failures of (string * exn) list]) request
+    :  (string list * [`Ok | `Failures of (string * exn) list]) command
   | Occurrences
-    : [`Ident_at of position]
-    -> Location.t list request
+    : [`Ident]
+    -> Location.t list command
   | Idle_job
-    : bool request
+    : bool command
   | Version
-    : string request
+    : string command
 
-type a_request = Request : 'a request -> a_request
+type request = Request : context * cursor * synchronization * 'a command -> request
 
-type response =
-  | Return    : 'a request * 'a -> response
-  | Failure   : string -> response
-  | Error     : Json.json -> response
-  | Exception : exn -> response
+type result =
+  | Return    : 'a command * 'a -> result
+  | Failure   : string -> result
+  | Error     : Json.json -> result
+  | Exception : exn -> result
+
+type response = {
+  messages: string list;
+  result: result;
+}

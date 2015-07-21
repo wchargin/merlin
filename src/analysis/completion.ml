@@ -97,7 +97,7 @@ let classify_node = function
   | Module_type_declaration_name _ -> `Module_type
 
 
-open Protocol.Compl
+open Protocol.Completion
 
 let make_candidate ?get_doc ~exact name ?loc ?path ty =
   let ident = match path with
@@ -572,7 +572,7 @@ let application_context ~verbosity ~prefix node ancestors =
           earg
       in
       let labels = labels_of_application ~prefix app in
-      `Application { Protocol.Compl.
+      `Application { Protocol.Completion.
                      argument_type = pr earg.exp_type;
                      labels = List.map (fun (lbl,ty) -> lbl, pr ty) labels;
                    }

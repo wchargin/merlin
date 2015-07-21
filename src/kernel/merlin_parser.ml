@@ -149,7 +149,7 @@ let dump_frame frame =
   let v = Frame.value frame in
   let position = (Frame.location frame).Location.loc_start in
   `Assoc [
-    "position", Lexing.json_of_position position;
+    "position", Json.of_position position;
     "content", `String (Values.(string_of_class (class_of_symbol v)));
   ]
 
@@ -164,7 +164,7 @@ let dump t =
   let lr0 = get_lr0_state t in
   (* Print overview of the stack *)
   `Assoc [
-    "guide", Lexing.json_of_position (get_location t).Location.loc_start;
+    "guide", Json.of_position (get_location t).Location.loc_start;
     "lr0", `Int lr0;
     "itemset", dump_itemset (P.Query.itemset lr0);
     "stack", dump_stack (Some (stack t));

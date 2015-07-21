@@ -137,7 +137,8 @@ let keyword_table : keywords =
     "asr", INFIXOP4("asr");
 ]
 
-let keywords l = create_hashtable 11 l
+let keywords l : keywords = create_hashtable 11 l
+let default_keywords : keywords = Hashtbl.create 0
 
 (* To store the position of the beginning of a string and comment *)
 let in_comment state = state.comment_start_loc <> []

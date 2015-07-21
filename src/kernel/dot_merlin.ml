@@ -31,6 +31,7 @@ open Misc
 
 let section = Logger.section "dot_merlin"
 
+
 type directive = [
   | `B of string
   | `S of string
@@ -42,96 +43,85 @@ type directive = [
 ]
 
 type file = {
-  project    : string option;
+  recurse    : bool;
   path       : string;
   directives : directive list;
 }
 
-let parse_dot_merlin_file path : bool * file =
-  let ic = open_in path in
-  let acc = ref [] in
-  let recurse = ref false in
-  let proj = ref None in
-  let tell l = acc := l :: !acc in
-  try
-    let rec aux () =
-      let line = String.trim (input_line ic) in
-      if line = "" then ()
-      else if String.is_prefixed ~by:"B " line then
-        tell (`B (String.drop 2 line))
-      else if String.is_prefixed ~by:"S " line then
-        tell (`S (String.drop 2 line))
-      else if String.is_prefixed ~by:"SRC " line then
-        tell (`S (String.drop 4 line))
-      else if String.is_prefixed ~by:"CMI " line then
-        tell (`CMI (String.drop 4 line))
-      else if String.is_prefixed ~by:"CMT " line then
-        tell (`CMT (String.drop 4 line))
-      else if String.is_prefixed ~by:"PKG " line then
-        tell (`PKG (rev_split_words (String.drop 4 line)))
-      else if String.is_prefixed ~by:"EXT " line then
-        tell (`EXT (rev_split_words (String.drop 4 line)))
-      else if String.is_prefixed ~by:"FLG " line then
-        tell (`FLG (String.drop 4 line))
-      else if String.is_prefixed ~by:"REC" line then
-        recurse := true
-      else if String.is_prefixed ~by:"PRJ " line then
-        proj := Some (String.trim (String.drop 4 line))
-      else if String.is_prefixed ~by:"PRJ" line then
-        proj := Some ""
-      else if String.is_prefixed ~by:"#" line then
-        ()
-      else
-        Logger.info Logger.Section.project_load ~title:".merlin"
-          (sprintf "unexpected directive \"%s\"" line) ;
-      aux ()
-    in
-    aux ()
-  with
-  | End_of_file ->
-    close_in_noerr ic;
-    !recurse, {project = !proj; path; directives = List.rev !acc}
-  | exn ->
-    close_in_noerr ic;
-    raise exn
-
-let rec find dir =
-  let fname = Filename.concat dir ".merlin" in
-  if Sys.file_exists fname && not (Sys.is_directory fname)
-  then Some fname
-  else
-    let parent = Filename.dirname dir in
-    if parent <> dir
-    then find parent
-    else None
+module Cache = File_cache.Make (struct
+    type t = file
+    let read path =
+      let ic = open_in path in
+      let acc = ref [] in
+      let recurse = ref false in
+      let tell l = acc := l :: !acc in
+      try
+        let rec aux () =
+          let line = String.trim (input_line ic) in
+          if line = "" then ()
+          else if String.is_prefixed ~by:"B " line then
+            tell (`B (String.drop 2 line))
+          else if String.is_prefixed ~by:"S " line then
+            tell (`S (String.drop 2 line))
+          else if String.is_prefixed ~by:"SRC " line then
+            tell (`S (String.drop 4 line))
+          else if String.is_prefixed ~by:"CMI " line then
+            tell (`CMI (String.drop 4 line))
+          else if String.is_prefixed ~by:"CMT " line then
+            tell (`CMT (String.drop 4 line))
+          else if String.is_prefixed ~by:"PKG " line then
+            tell (`PKG (rev_split_words (String.drop 4 line)))
+          else if String.is_prefixed ~by:"EXT " line then
+            tell (`EXT (rev_split_words (String.drop 4 line)))
+          else if String.is_prefixed ~by:"FLG " line then
+            tell (`FLG (String.drop 4 line))
+          else if String.is_prefixed ~by:"REC" line then
+            recurse := true
+          else if String.is_prefixed ~by:"#" line then
+            ()
+          else
+            Logger.tell_editor (sprintf "%s: unexpected directive \"%s\"" path line);
+          aux ()
+        in
+        aux ()
+      with
+      | End_of_file ->
+        close_in_noerr ic;
+        {recurse = !recurse; path; directives = List.rev !acc}
+      | exn ->
+        close_in_noerr ic;
+        raise exn
+  end)
 
 let find fname =
   if Sys.file_exists fname && not (Sys.is_directory fname) then
     Some fname
-  else find fname
+  else
+    let rec loop dir =
+      let fname = Filename.concat dir ".merlin" in
+      if Sys.file_exists fname && not (Sys.is_directory fname)
+      then Some fname
+      else
+        let parent = Filename.dirname dir in
+        if parent <> dir
+        then loop parent
+        else None
+    in
+    loop fname
 
-let rec read tail path =
-  let recurse, dot_merlin = parse_dot_merlin_file path in
-  let next = if recurse
-    then lazy (find_next tail (Filename.dirname (Filename.dirname path)))
-    else tail
-  in
-  List.Lazy.Cons (dot_merlin, next)
-
-and find_next tail path =
-  match find path with
-  | Some path -> read tail path
-  | None -> Lazy.force tail
-
-let find path = find (canonicalize_filename path)
-let read ?(tail=lazy List.Lazy.Nil) path = read tail (canonicalize_filename path)
-
-let rec project_name = function
-  | List.Lazy.Cons (({project = Some ""; path = name} | {project = Some name}), _) ->
-    Some name
-  | List.Lazy.Cons ({path}, lazy List.Lazy.Nil) -> Some path
-  | List.Lazy.Cons (_, lazy tail) -> project_name tail
-  | List.Lazy.Nil -> None
+let rec directives_of_file fname =
+  match find fname with
+  | None -> []
+  | Some fname ->
+    let file = Cache.read fname in
+    file ::
+    if file.recurse then
+      let path = file.path in
+      let dir = Filename.dirname @@ Filename.dirname @@ path in
+      if dir <> path then
+        directives_of_file dir
+      else []
+    else []
 
 type config =
   {
@@ -145,31 +135,32 @@ type config =
     extensions  : string list;
   }
 
-let parse_dot_merlin {path; directives} config =
-  let cwd = Filename.dirname path in
-  let expand path acc =
-    let filter name =
-      try Sys.is_directory name
-      with _ -> false
-    in
-    let path = expand_directory Config.standard_library path in
-    let path = canonicalize_filename ~cwd path in
-    expand_glob ~filter path acc
+type t = {
+  filenames: string list;
+  mutable files: file list list;
+  mutable config: config option;
+}
+
+let load filenames =
+  let filenames = List.map ~f:canonicalize_filename filenames in
+  {
+    filenames;
+    files = List.map ~f:directives_of_file filenames;
+    config = None;
+  }
+
+let update t =
+  let files' = List.map ~f:directives_of_file t.filenames in
+  let for_all2 ~f la lb =
+    List.length la = List.length lb &&
+    List.for_all2 ~f la lb
   in
-  List.fold_left ~init:{config with dot_merlins = path :: config.dot_merlins}
-  ~f:(fun config ->
-    function
-    | `B path -> {config with build_path = expand path config.build_path}
-    | `S path -> {config with source_path = expand path config.source_path}
-    | `CMI path -> {config with cmi_path = expand path config.cmi_path}
-    | `CMT path -> {config with cmt_path = expand path config.cmt_path}
-    | `PKG pkgs -> {config with packages = pkgs @ config.packages}
-    | `EXT exts ->
-      {config with extensions = exts @ config.extensions}
-    | `FLG flags ->
-      let flags = List.rev (rev_split_words flags) in
-      {config with flags = flags :: config.flags}
-  ) directives
+  let uptodate = for_all2 t.files files'
+      ~f:(for_all2 ~f:(fun d d' -> d == d' || d = d'))
+  in
+  t.files <- files';
+  if not uptodate then
+    t.config <- None
 
 let empty_config = {
   build_path  = [];
@@ -182,21 +173,61 @@ let empty_config = {
   flags       = [];
 }
 
-let rec parse ?(config=empty_config) =
-  function
-  | List.Lazy.Cons (dot_merlin, lazy tail) ->
-    parse ~config:(parse_dot_merlin dot_merlin config) tail
-  | List.Lazy.Nil ->
-    {
-      dot_merlins = config.dot_merlins;
-      build_path  = List.rev (List.filter_dup config.build_path);
-      source_path = List.rev (List.filter_dup config.source_path);
-      cmi_path    = List.rev (List.filter_dup config.cmi_path);
-      cmt_path    = List.rev (List.filter_dup config.cmt_path);
-      packages    = List.rev (List.filter_dup config.packages);
-      extensions  = List.rev (List.filter_dup config.extensions);
-      flags       = List.rev (List.filter_dup config.flags);
-    }
+let prepend_config {path; directives} config =
+  let cwd = Filename.dirname path in
+  let expand path acc =
+    let filter name =
+      try Sys.is_directory name
+      with _ -> false
+    in
+    let path = expand_directory Config.standard_library path in
+    let path = canonicalize_filename ~cwd path in
+    expand_glob ~filter path acc
+  in
+  List.fold_left ~init:{config with dot_merlins = path :: config.dot_merlins}
+    ~f:(fun config ->
+        function
+        | `B path -> {config with build_path = expand path config.build_path}
+        | `S path -> {config with source_path = expand path config.source_path}
+        | `CMI path -> {config with cmi_path = expand path config.cmi_path}
+        | `CMT path -> {config with cmt_path = expand path config.cmt_path}
+        | `PKG pkgs -> {config with packages = pkgs @ config.packages}
+        | `EXT exts ->
+          {config with extensions = exts @ config.extensions}
+        | `FLG flags ->
+          let flags = List.rev (rev_split_words flags) in
+          {config with flags = flags :: config.flags}
+      ) directives
+
+let postprocess_config config =
+  let clean list = List.rev (List.filter_dup list) in
+  {
+    dot_merlins = config.dot_merlins;
+    build_path  = clean config.build_path;
+    source_path = clean config.source_path;
+    cmi_path    = clean config.cmi_path;
+    cmt_path    = clean config.cmt_path;
+    packages    = clean config.packages;
+    extensions  = clean config.extensions;
+    flags       = clean config.flags;
+  }
+
+let config t = match t.config with
+  | Some config -> config
+  | None ->
+    let config =
+      List.fold_left t.files ~init:empty_config
+        ~f:(fun config subfiles ->
+            List.fold_left subfiles ~init:config
+              ~f:(fun config file -> prepend_config file config))
+      |> postprocess_config
+    in
+    t.config <- Some config;
+    config
+
+let same = (==)
+
+(* FIXME: Move elsewhere, processing of findlib packages*)
 
 let ppx_of_package ?(predicates=[]) setup pkg =
   let d = Findlib.package_directory pkg in
@@ -268,8 +299,4 @@ let path_of_packages packages =
   let packages = List.filter_dup (List.concat packages) in
   let path = List.map ~f:Findlib.package_directory packages in
   let ppxs = List.fold_left ~f:ppx_of_package packages ~init:Ppxsetup.empty in
-  let failures = match failures with
-    | [] -> `Ok
-    | ls -> `Failures ls
-  in
-  failures, path, ppxs
+  `Failures failures, path, ppxs

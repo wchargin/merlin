@@ -236,6 +236,12 @@ let parse_opt error active flags s =
 let copy {active; error} =
   {active = Array.copy active; error = Array.copy error}
 
+let reset {active; error} ~from =
+  for i = 0 to Array.length active - 1 do
+    active.(i) <- from.active.(i);
+    error.(i) <- from.error.(i);
+  done
+
 let parse_options ?state errflag s =
   let {error; active} = match state with
     | None -> copy !current

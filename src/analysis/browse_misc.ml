@@ -72,7 +72,7 @@ let signature_of_env ?(ignore_extensions=true) env =
 
 let rec dump_ts ts =
   let dump_t { t_loc ; t_node ; t_children = lazy children } =
-    IO.with_location t_loc
+    Json.with_location t_loc
     [
       "kind", `String (string_of_node t_node);
       "children", dump_ts children

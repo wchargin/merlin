@@ -28,6 +28,8 @@
 
 type keywords = Raw_lexer.keywords
 
+val default_keywords : keywords
+
 (* Lexing is split in two steps.
 
    First the list of tokens is represented by a [item History.t].

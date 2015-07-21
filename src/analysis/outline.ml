@@ -39,8 +39,8 @@ let id_of_patt = function
   | { pat_desc = Tpat_var (id, _) ; _ } -> Some id
   | _ -> None
 
-let mk ?(children=[]) ~location outline_kind id =
-  { Protocol. outline_name = Ident.name id; outline_kind; location; children }
+let mk ?(children=[]) ~location kind id =
+  { Protocol.Outline. name = Ident.name id; kind; location; children }
 
 let rec summarize node =
   let location = node.t_loc in
@@ -79,10 +79,10 @@ let rec summarize node =
     let name = String.concat ~sep:"." (Path.to_string_list te.tyext_path) in
     let children =
       List.filter_map (Lazy.force node.t_children) ~f:(fun x ->
-        summarize x >>| fun x -> { x with Protocol.outline_kind = `Constructor }
+        summarize x >>| fun x -> { x with Protocol.Outline.kind = `Constructor }
       )
     in
-    Some { Protocol. outline_name = name; outline_kind = `Type; location; children }
+    Some { Protocol.Outline. name; kind = `Type; location; children }
 
   | Extension_constructor ec ->
     Some (mk ~location `Exn ec.ext_id )
@@ -134,9 +134,9 @@ let shape cursor nodes =
              Lexing.compare_pos node.t_loc.Location.loc_end cursor <> 0
     in
     if selected then [{
-        Protocol.
-        shape_loc = node.t_loc;
-        shape_sub = List.concat_map ~f:aux (Lazy.force node.t_children)
+        Protocol.Shape.
+        location = node.t_loc;
+        children = List.concat_map ~f:aux (Lazy.force node.t_children)
       }]
     else []
   in

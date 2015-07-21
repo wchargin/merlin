@@ -40,47 +40,25 @@ module Parser = Merlin_parser
 module Typer  = Merlin_typer
 module Recover = Merlin_recover
 
-(* Project configuration *)
-module Project : sig
+(* Compute and cache configuration (paths, extensions, ...) *)
+module Config : sig
   type t
 
-  (* A global store mapping (.merlin-)path to projects *)
-  val get : string list -> t * [`Fresh | `Cached]
+  val create : dot_merlins:string list -> local_path:string list -> t
 
-  (* Current buffer path *)
-  val set_local_path : t -> string list -> unit
+  val dot_merlins : t -> string list
+  val set_user_config : t -> Dot_merlin.config -> unit
 
-  (* Project-wide configuration *)
-  val autoreload_dot_merlin : t -> unit
-  val get_dot_merlins_failure : t -> (string * exn) list
-
-  (* paths of dot_merlins with mtime at time of load *)
-  val get_dot_merlins : t -> (string * Misc.file_id) list
-
-  (* Dump all the flags given to merlin. *)
-  val get_flags : t -> (string * string list list) list
-
-  (* Config override by user *)
-  module User : sig
-    val reset : t -> unit
-    val path : t -> action:[`Add|`Rem] -> var:[`Build|`Source] -> ?cwd:string -> string -> unit
-    val load_packages : t -> string list -> [`Ok | `Failures of (string * exn) list]
-    val set_extension : t -> enabled:bool -> string -> (string * exn) option
-    val add_flags : t -> string list -> [`Ok | `Failures of (string * exn) list]
-    val get_flags : t -> string list list
-    val clear_flags : t -> [`Ok | `Failures of (string * exn) list]
-  end
+  val dot_failures : t -> (string * exn) list
+  val user_failures : t -> (string * exn) list
 
   (* Path configuration *)
   val source_path : t -> Path_list.t
   val build_path  : t -> Path_list.t
   val cmt_path    : t -> Path_list.t
 
-  (* List all top modules of current project *)
+  (* List all top modules  *)
   val global_modules : t -> string list
-
-  (* Force recomputation of top modules *)
-  val flush_global_modules : t -> unit
 
   (* Enabled extensions *)
   val extensions: t -> Extension.set
@@ -88,104 +66,64 @@ module Project : sig
   (* Lexer keywords for current config *)
   val keywords: t -> Lexer.keywords
 
-  (* Make global state point to current project *)
+  (* Make global state point to current config *)
   val setup : t -> unit
 
-  (* Invalidate cache *)
-  val validity_stamp: t -> bool ref
-  val invalidate: ?flush:bool -> t -> unit
-  val flush_cache: t -> unit
-
+  val check_disk : t -> unit
+  val stamp : t -> bool ref
 end = struct
 
-  type config = {
-    mutable cfg_extensions : Extension.set;
-    mutable cfg_flags      : string list list;
-    mutable cfg_ppxs       : Ppxsetup.t;
-    cfg_path_build  : string list ref;
-    cfg_path_source : string list ref;
-    cfg_path_cmi    : string list ref;
-    cfg_path_cmt    : string list ref;
-    cfg_path_pkg    : string list ref;
-  }
-
-  let empty_config () = {
-    cfg_extensions = String.Set.empty;
-    cfg_flags = [];
-    cfg_ppxs  = Ppxsetup.empty;
-    cfg_path_build  = ref [];
-    cfg_path_source = ref [];
-    cfg_path_cmi    = ref [];
-    cfg_path_cmt    = ref [];
-    cfg_path_pkg    = ref [];
-  }
-
-  let reset_config cfg =
-    cfg.cfg_path_build := [];
-    cfg.cfg_path_source := [];
-    cfg.cfg_path_cmi := [];
-    cfg.cfg_path_cmt := [];
-    cfg.cfg_path_pkg := []
-
   type t = {
-    mutable dot_merlins_path : (string * Misc.file_id) list;
-    mutable dot_merlins : (string * Misc.file_id) list;
-    mutable dot_merlins_failures : (string * exn) list;
+    mutable dot_merlin : Dot_merlin.t * Dot_merlin.config;
+    mutable dot_failures : (string * exn) list;
 
-    dot_config : config;
-    user_config : config;
+    mutable user_config : Dot_merlin.config;
+    mutable user_failures : (string * exn) list;
 
-    mutable flags : Clflags.set;
-    mutable warnings : Warnings.state;
+    flags : Clflags.set;
+    warnings : Warnings.state;
 
-    local_path : string list ref;
+    local_path  : string list;
 
-    source_path : Path_list.t;
-    build_path  : Path_list.t;
-    cmt_path    : Path_list.t;
+    source_path : string list ref;
+    build_path  : string list ref;
+    cmt_path    : string list ref;
 
-    mutable global_modules: string list option;
-    mutable keywords_cache: Lexer.keywords * Extension.set;
-    mutable validity_stamp: bool ref
+    mutable extensions : Extension.set;
+    mutable keywords : Lexer.keywords;
+    mutable stamp : bool ref;
   }
 
-  let flush_global_modules project =
-    project.global_modules <- None
+  let create ~dot_merlins ~local_path =
+    let dot = Dot_merlin.load dot_merlins in
+    {
+      dot_merlin = (dot, Dot_merlin.config dot);
+      dot_failures = [];
 
-  let global_modules project =
-    match project.global_modules with
-    | Some lst -> lst
-    | None ->
-      let lst =
-        Misc.modules_in_path ~ext:".cmi"
-          (Misc.Path_list.to_strict_list project.build_path)
-      in
-      project.global_modules <- Some lst;
-      lst
+      user_config = Dot_merlin.empty_config;
+      user_failures = [];
 
-  let source_path p = p.source_path
-  let build_path  p = p.build_path
-  let cmt_path    p = p.cmt_path
+      flags = Clflags.copy Clflags.initial;
+      warnings = Warnings.copy Warnings.initial;
 
-  let set_local_path project path =
-    if path != !(project.local_path) then begin
-      project.local_path := path;
-      flush_global_modules project
-    end
+      local_path;
 
-  let update_ppxs prj =
-    let ppxs = Ppxsetup.union
-        prj.user_config.cfg_ppxs
-        prj.dot_config.cfg_ppxs in
-    prj.flags.Clflags.ppx <-
-      Ppxsetup.union prj.flags.Clflags.ppx ppxs
+      source_path = ref [];
+      build_path  = ref [];
+      cmt_path    = ref [];
 
-  let update_flags prj =
-    prj.flags <- Clflags.copy Clflags.initial;
-    prj.warnings <- Warnings.copy Warnings.initial;
+      extensions = Extension.empty;
+      keywords = Lexer.default_keywords;
+
+      stamp = ref false;
+    }
+
+  let compute_flags t ~dot ~user =
+    Clflags.reset t.flags ~from:Clflags.initial;
+    Warnings.reset t.warnings ~from:Warnings.initial;
     let spec =
-      Clflags.arg_spec prj.flags @
-      Warnings.arg_spec prj.warnings
+      Clflags.arg_spec t.flags @
+      Warnings.arg_spec t.warnings
     in
     let process_flags spec flags =
       let failures = ref [] in
@@ -199,7 +137,7 @@ end = struct
         | Arg.Help _ -> (* ignore *)
           loop ~current flags
       in
-      loop flags ;
+      loop flags;
       !failures
     in
     let process_flags_list lst ~init =
@@ -208,242 +146,127 @@ end = struct
         List.rev_append (process_flags spec flags) acc
       )
     in
-    let failures = process_flags_list prj.dot_config.cfg_flags ~init:[] in
-    let failures = List.rev_append (process_flags (Main_args.flags @ spec) Sys.argv) failures in
-    let failures = process_flags_list prj.user_config.cfg_flags ~init:failures in
-    update_ppxs prj;
-    failures
+    let dfailures = process_flags_list dot.Dot_merlin.flags ~init:[] in
+    let dfailures = List.rev_append (process_flags (Main_args.flags @ spec) Sys.argv) dfailures in
+    let ufailures = process_flags_list user.Dot_merlin.flags ~init:[] in
+    dfailures, ufailures
 
-  let get_flags project = [
-    "user", project.user_config.cfg_flags;
-    "cmd line", [ List.tl @@ Array.to_list Sys.argv ];
-    ".merlin", project.dot_config.cfg_flags;
-  ]
-
-  let invalidate ?(flush=true) project =
-    if flush then Cmi_cache.flush ();
-    project.validity_stamp := false;
-    project.validity_stamp <- ref true
-
-  (* Config override by user *)
-  module User = struct
-    let reset project =
-      let cfg = project.user_config in
-      cfg.cfg_path_build := [];
-      cfg.cfg_path_source := [];
-      cfg.cfg_path_cmi := [];
-      cfg.cfg_path_cmt := [];
-      cfg.cfg_flags <- [];
-      cfg.cfg_extensions <- String.Set.empty
-
-    let path project ~action ~var ?cwd path =
-      let cfg = project.user_config in
-      let r = match var with
-        | `Source -> cfg.cfg_path_source
-        | `Build  -> cfg.cfg_path_build
-      in
-      let d = canonicalize_filename ?cwd
-                (expand_directory Config.standard_library path)
-      in
-      r := List.filter ~f:((<>) d) !r;
-      begin match action with
-      | `Add -> r := d :: !r
-      | `Rem -> ()
-      end;
-      flush_global_modules project
-
-    let load_packages project pkgs =
-      let result, path, ppxs = Dot_merlin.path_of_packages pkgs in
-      let cfg = project.user_config in
-      let rpath = cfg.cfg_path_pkg in
-      rpath := List.filter_dup (path @ !rpath);
-      cfg.cfg_ppxs <- Ppxsetup.union ppxs cfg.cfg_ppxs;
-      update_ppxs project;
-      result
-
-    let add_flags project flags =
-      project.user_config.cfg_flags <- flags :: project.user_config.cfg_flags ;
-      invalidate ~flush:false project ;
-      match update_flags project with
-      | [] -> `Ok
-      | lst -> `Failures lst
-
-    let get_flags project =
-      project.user_config.cfg_flags
-
-    let clear_flags project =
-      project.user_config.cfg_flags <- [] ;
-      invalidate ~flush:false project ;
-      match update_flags project with
-      | [] -> `Ok
-      | lst -> `Failures lst
-
-    let set_extension project ~enabled path =
-      let cfg = project.user_config in
-      if String.Set.mem path Extension.all then
-        let f  = String.Set.(if enabled then add else remove) in
-        let () = cfg.cfg_extensions <- f path cfg.cfg_extensions in
-        None
-      else begin
-        Logger.info Logger.Section.project_load ~title:"EXT"
-          (sprintf "unknown extensions: \"%s\"" path) ;
-        Some (path, Extension.Unknown)
-      end
-  end
-
-  let set_dot_merlin project paths =
-    project.dot_merlins_path <- List.map (fun p -> p, Misc.file_id p) paths;
-    let module Dm = Dot_merlin in
-    let rec aux = function
-      | [] -> List.Lazy.Nil
-      | x :: xs -> Dm.read ~tail:(lazy (aux xs)) x
+  let refresh t =
+    let dm = fst t.dot_merlin in
+    let d = Dot_merlin.config dm and u = t.user_config in
+    t.dot_merlin <- (dm, d);
+    let `Failures derrors, dpkgs, dppxs =
+      Dot_merlin.path_of_packages d.Dot_merlin.packages
+    and `Failures uerrors, upkgs, uppxs =
+      Dot_merlin.path_of_packages u.Dot_merlin.packages
     in
-    let dm = Dm.parse (aux paths) in
-    let cfg = project.dot_config in
-    let result, path_pkg, ppxs = Dot_merlin.path_of_packages dm.Dm.packages in
-    project.dot_merlins <- List.map dm.Dm.dot_merlins
-        ~f:(fun file -> file, Misc.file_id file);
-    cfg.cfg_path_pkg := List.filter_dup path_pkg;
-    cfg.cfg_path_build := dm.Dm.build_path;
-    cfg.cfg_path_source := dm.Dm.source_path;
-    cfg.cfg_path_cmi := dm.Dm.cmi_path;
-    cfg.cfg_path_cmt := dm.Dm.cmt_path;
-    cfg.cfg_flags <- dm.Dm.flags;
-    cfg.cfg_ppxs <- ppxs;
-    let known_extensions, unknown_extensions =
-      List.partition dm.Dm.extensions ~f:(fun ext ->
-        String.Set.mem ext Extension.all
-      )
-    in
-    List.iter unknown_extensions ~f:(fun ext ->
-      Logger.info Logger.Section.project_load ~title:"EXT"
-        (sprintf "unknown extensions: \"%s\"" ext)
-    ) ;
-    cfg.cfg_extensions <- String.Set.of_list known_extensions;
-    flush_global_modules project;
-    project.dot_merlins_failures <-
-      (match result  with `Ok -> [] | `Failures l -> l) @
-      (List.map unknown_extensions ~f:(fun e -> e, Extension.Unknown)) @
-      update_flags project;
-    invalidate project
+    let derrors', uerrors' = compute_flags t ~dot:d ~user:u in
+    t.dot_failures <- derrors' @ derrors;
+    t.user_failures <- uerrors' @ uerrors;
+    t.source_path := List.flatten [
+        u.Dot_merlin.source_path;
+        t.local_path;
+        d.Dot_merlin.source_path;
+        upkgs;
+        dpkgs;
+      ];
+    t.build_path := List.flatten [
+        u.Dot_merlin.cmi_path;
+        u.Dot_merlin.build_path;
+        t.local_path;
+        d.Dot_merlin.cmi_path;
+        d.Dot_merlin.build_path;
+        upkgs;
+        dpkgs;
+        !(t.flags.Clflags.include_dirs);
+        !(t.flags.Clflags.std_include);
+      ];
+    t.cmt_path := List.flatten [
+        u.Dot_merlin.source_path;
+        t.local_path;
+        d.Dot_merlin.source_path;
+        upkgs;
+        dpkgs;
+        !(t.flags.Clflags.include_dirs);
+        !(t.flags.Clflags.std_include);
+      ];
+    t.flags.Clflags.ppx <-
+      Ppxsetup.(union t.flags.Clflags.ppx (union dppxs uppxs));
+    t.extensions <-
+      String.Set.union
+        (String.Set.of_list (u.Dot_merlin.extensions @ d.Dot_merlin.extensions))
+        (Extension.from_packages (u.Dot_merlin.packages @ d.Dot_merlin.packages));
+    t.keywords <- Extension.keywords t.extensions
 
-  let create dot_merlins =
-    let dot_config = empty_config () in
-    let user_config = empty_config () in
-    let local_path = ref [] in
-    let prepare l = Path_list.(of_list (List.map ~f:of_string_list_ref l)) in
-    let flags = Clflags.copy Clflags.initial in
-    let project =
-      { dot_merlins_path = [];
-        dot_merlins = [];
-        dot_merlins_failures = [];
-        dot_config; user_config; flags;
-        warnings = Warnings.initial;
-        local_path;
-        source_path = prepare [
-            user_config.cfg_path_source;
-            local_path;
-            dot_config.cfg_path_source;
-            (* Experimental: used by locate *)
-            user_config.cfg_path_pkg;
-            dot_config.cfg_path_pkg;
-          ];
-        build_path = prepare [
-            user_config.cfg_path_cmi;
-            user_config.cfg_path_build;
-            local_path;
-            dot_config.cfg_path_cmi;
-            dot_config.cfg_path_build;
-            user_config.cfg_path_pkg;
-            dot_config.cfg_path_pkg;
-            flags.Clflags.include_dirs;
-            flags.Clflags.std_include;
-          ];
-        cmt_path = prepare [
-            user_config.cfg_path_cmt;
-            user_config.cfg_path_build;
-            local_path;
-            dot_config.cfg_path_cmt;
-            dot_config.cfg_path_build;
-            user_config.cfg_path_pkg;
-            dot_config.cfg_path_pkg;
-            flags.Clflags.include_dirs;
-            flags.Clflags.std_include;
-          ];
-        global_modules = None;
-        keywords_cache = Raw_lexer.keywords [], String.Set.empty;
-        validity_stamp = ref true;
-      }
-    in
-    set_dot_merlin project dot_merlins;
-    project
+  let refresh t =
+    if not !(t.stamp) then
+      (refresh t; t.stamp <- ref true)
 
-  let store : (string list, t) Hashtbl.t = Hashtbl.create 3
-  let get path =
-    try Hashtbl.find store path, `Cached
-    with Not_found ->
-      let project = create path in
-      Hashtbl.replace store path project;
-      project, `Fresh
+  let check_disk t =
+    let dm, c = t.dot_merlin in
+    Dot_merlin.update dm;
+    if not (Dot_merlin.same (Dot_merlin.config dm) c) then
+      t.stamp := false
 
-  let autoreload_dot_merlin project =
-    let out_of_date (path, fid) =
-      not (Misc.file_id_check (Misc.file_id path) fid)
-    in
-    if List.exists ~f:out_of_date project.dot_merlins ||
-       List.exists ~f:out_of_date project.dot_merlins_path
-    then
-      try
-        set_dot_merlin project (List.map fst project.dot_merlins_path);
-      with exn ->
-        project.dot_merlins_failures <- ["reloading", exn]
+  let stamp t =
+    refresh t;
+    assert !(t.stamp);
+    t.stamp
 
-  let get_dot_merlins project =
-    project.dot_merlins
+  let global_modules t =
+    refresh t;
+    Misc.modules_in_path ~ext:".cmi" !(t.build_path)
 
-  let get_dot_merlins_failure project =
-    project.dot_merlins_failures
+  let extensions t =
+    refresh t;
+    t.extensions
 
-  (* Make global state point to current project *)
-  let setup project =
-    Clflags.set := project.flags;
-    Warnings.current := project.warnings;
-    Config.load_path := project.build_path
+  let keywords t =
+    refresh t;
+    t.keywords
 
-  (* Enabled extensions *)
-  let extensions project =
-    String.Set.union
-      project.dot_config.cfg_extensions
-      project.user_config.cfg_extensions
+  let source_path t =
+    refresh t;
+    Path_list.of_string_list_ref t.source_path
 
-  (* Lexer keywords for current config *)
-  let keywords project =
-    let set = extensions project in
-    match project.keywords_cache with
-    | kw, set' when String.Set.equal set set' -> kw
-    | _ ->
-      let kw = Extension.keywords set in
-      project.keywords_cache <- kw, set;
-      kw
+  let build_path t =
+    refresh t;
+    Path_list.of_string_list_ref t.build_path
 
-  let validity_stamp p =
-    assert !(p.validity_stamp);
-    p.validity_stamp
+  let cmt_path t =
+    refresh t;
+    Path_list.of_string_list_ref t.cmt_path
 
-  let flush_cache project =
-    Cmi_cache.flush ();
+  (* Make global state point to current config *)
+  let setup t =
+    refresh t;
+    Clflags.set := t.flags;
+    Warnings.current := t.warnings;
+    Config.load_path := Path_list.of_string_list_ref t.build_path
+
+  let dot_merlins t =
+    refresh t; (snd t.dot_merlin).Dot_merlin.dot_merlins
+  let dot_failures t =
+    refresh t; t.dot_failures
+
+  let user_failures t =
+    refresh t; t.user_failures
+
+  let set_user_config t config =
+    t.user_config <- config;
+    t.stamp := false
 end
 
 module Buffer : sig
   type t
   val create: ?dot_merlins:string list -> ?path:string -> Parser.state -> t
 
-  val unit_name : t -> string
-  val project: t -> Project.t
+  val unit_name: t -> string
+  val config: t -> Config.t
 
   val lexer: t -> (exn list * Lexer.item) History.t
-  val update: t -> (exn list * Lexer.item) History.t -> [`Nothing_done | `Updated]
-  val start_lexing: ?pos:Lexing.position -> t -> Lexer.t
+  val update: t -> (exn list * Lexer.item) History.t -> unit
+  val start_lexing: t -> Lexer.t
   val lexer_errors: t -> exn list
 
   val comments: t -> (string * Location.t) list
@@ -461,7 +284,7 @@ module Buffer : sig
 
   val is_implementation : t -> bool
 
-  (* All top modules of current project, with current module removed *)
+  (* All top modules, with current module removed *)
   val global_modules: t -> string list
 
   (* Try to do a background job, return false if nothing has to be done *)
@@ -472,17 +295,12 @@ end = struct
     path: string option;
     dot_merlins: string list;
     unit_name : string;
-    mutable project : Project.t;
+    mutable config : Config.t;
     mutable stamp : bool ref;
-    mutable keywords: Lexer.keywords;
     mutable lexer: (exn list * Lexer.item) History.t;
     mutable recover: (Lexer.item * Recover.t) History.t;
     mutable typer: Typer.t;
   }
-
-  let invalidate t =
-    t.stamp := false;
-    t.stamp <- ref true
 
   let is_implementation { kind ; _ } = kind = Parser.implementation
 
@@ -493,19 +311,9 @@ end = struct
     in
     (token, Recover.fresh (Parser.from kind input))
 
-  let find_dot_merlins dot_merlins =
-    List.filter_map ~f:Dot_merlin.find dot_merlins
-
-  let autoreload_dot_merlin buffer =
-    let project' = buffer.project in
-    let project, status = Project.get (find_dot_merlins buffer.dot_merlins) in
-    buffer.project <- project;
-    match status with
-    | `Fresh -> invalidate buffer
-    | `Cached ->
-      Project.autoreload_dot_merlin project;
-      if project' != project then
-        invalidate buffer
+  let setup config =
+    Config.check_disk config;
+    Config.setup config
 
   let create ?(dot_merlins=[]) ?path kind =
     let path, filename = match path with
@@ -523,44 +331,26 @@ end = struct
     in
     let unit_name = String.capitalize unit_name in
     let lexer = Lexer.empty ~filename in
-    let project =
-      match Project.get (find_dot_merlins dot_merlins) with
-      | project, `Fresh -> project
-      | project, `Cached ->
-        ignore (Project.autoreload_dot_merlin project);
-        project
-    in
+    let config = Config.create ~dot_merlins ~local_path:(Option.to_list path) in
     let stamp = ref true in
-    Project.setup project;
+    Config.setup config;
     {
-      dot_merlins; path; project; lexer; kind; unit_name; stamp;
-      keywords = Project.keywords project;
+      dot_merlins; path; config; lexer; kind; unit_name; stamp;
+      keywords = Config.keywords config;
       recover = History.initial (initial_step kind (History.focused lexer));
       typer = Typer.fresh
-          ~unit_name ~stamp:[Project.validity_stamp project; stamp]
-          (Project.extensions project);
+          ~unit_name ~stamp:[Config.stamp config; stamp]
+          (Config.extensions config);
     }
 
-  let setup buffer =
-    autoreload_dot_merlin buffer;
-    begin match buffer.path with
-      | Some path -> Project.set_local_path buffer.project [path]
-      | None -> ()
-    end;
-    Project.setup buffer.project
-
+  let config t = t.config
+  let setup t = setup (config t)
   let unit_name t = t.unit_name
-
-  let project t = t.project
-
   let lexer b = b.lexer
   let lexer_errors b = fst (History.focused b.lexer)
-
   let recover_history b = b.recover
   let recover b = snd (History.focused b.recover)
-
   let comments b = Recover.comments (recover b)
-
   let parser b = Recover.parser (recover b)
   let parser_errors b = Recover.exns (recover b)
 
@@ -569,12 +359,12 @@ end = struct
     let valid = Typer.is_valid b.typer &&
                 String.Set.equal
                   (Typer.extensions b.typer)
-                  (Project.extensions b.project) in
+                  (Config.extensions b.config) in
     if not valid then
-        b.typer <- Typer.fresh
-            ~unit_name:b.unit_name
-            ~stamp:[Project.validity_stamp b.project; b.stamp]
-            (Project.extensions b.project);
+      b.typer <- Typer.fresh
+          ~unit_name:b.unit_name
+          ~stamp:[Config.stamp b.config; b.stamp]
+          (Config.extensions b.config);
     b.typer <- Typer.update (parser b) b.typer;
     b.typer
 
@@ -585,37 +375,12 @@ end = struct
     let init token = initial_step t.kind token in
     let strong_fold (_,token) (_,recover) = token, Recover.fold token recover in
     let weak_update (_,token) (_,recover) = (token,recover) in
-    let recover', updated = History.sync t.lexer (Some t.recover)
-        ~init ~strong_check ~strong_fold ~weak_check ~weak_update; in
+    let recover', _updated = History.sync t.lexer (Some t.recover)
+        ~init ~strong_check ~strong_fold ~weak_check ~weak_update in
     t.recover <- recover';
-    updated
 
-  let start_lexing ?pos b =
-    let kw = Project.keywords b.project in
-    if kw != b.keywords then begin
-      b.keywords <- kw;
-      ignore (update b (History.drop_tail (History.seek_backward
-                                             (fun _ -> true) b.lexer)))
-    end
-    else begin
-      let pos_pred = match pos with
-        | None -> (fun _ -> false)
-        | Some pos ->
-          let line, _ = Lexing.split_pos pos in
-          (fun cur -> let line', _ = Lexing.split_pos cur in line <= line')
-      in
-      let item_pred = function
-        | _, Lexer.Valid (cur,_,_) when pos_pred cur -> true
-        | _, Lexer.Valid (p,_,_) when p = Lexing.dummy_pos -> true
-        | _, Lexer.Error _ -> true
-        | _ -> false
-      in
-      let lexer = b.lexer in
-      let lexer = History.seek_backward item_pred lexer in
-      let lexer = History.move (-1) lexer in
-      ignore (update b lexer)
-    end;
-    Lexer.start kw b.lexer
+  let start_lexing b = let kw = Config.keywords b.config in
+    Lexer.start kw (History.seek_backward (fun _ -> true) b.lexer)
 
   let get_mark t = Parser.find_marker (parser t)
 
@@ -625,7 +390,7 @@ end = struct
 
   let global_modules t =
     setup t;
-    List.remove t.unit_name (Project.global_modules t.project)
+    List.remove t.unit_name (Config.global_modules t.config)
 
   exception Break
   let idle_job t =
@@ -633,5 +398,4 @@ end = struct
     Clflags.real_paths () <> `Real &&
     let concr = Env.used_persistent () in
     Types.Concr.exists Printtyp.compute_map_for_pers concr
-
 end

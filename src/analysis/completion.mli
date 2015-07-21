@@ -35,14 +35,14 @@ val node_complete
   -> ?target_type:Types.type_expr
   -> BrowseT.t
   -> string
-  -> Protocol.Compl.entry list
+  -> Protocol.Completion.entry list
 
 val expand_prefix : global_modules:string list -> Env.t -> string
-  -> Protocol.Compl.entry list
+  -> Protocol.Completion.entry list
 
 val application_context : verbosity:int
   -> prefix:Asttypes.label
   -> BrowseT.t
   -> BrowseT.t list
   -> Types.type_expr option *
-     [> `Application of Protocol.Compl.application_context | `Unknown ]
+     [> `Application of Protocol.Completion.application_context | `Unknown ]

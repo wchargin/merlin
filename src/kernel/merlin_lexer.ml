@@ -30,6 +30,8 @@ open Std
 
 type keywords = Raw_lexer.keywords
 
+let default_keywords = Raw_lexer.keywords []
+
 (* Lexing step *)
 type item =
   | Valid of Lexing.position * Raw_parser.token * Lexing.position

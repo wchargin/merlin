@@ -80,11 +80,12 @@ val all_constructor_occurrences :
 
 (** From a chain of nodes, going from the root to the leaf, returns a list in
  *  the same ordering about what is known about tail positions *)
-val annotate_tail_calls : t list -> (t * Protocol.is_tail_position) list
+val annotate_tail_calls
+  : t list -> (t * Protocol.Type_enclosing.is_tail_position) list
 
 (** Same function, but operating from leaves to root *)
 val annotate_tail_calls_from_leaf
-  : t list -> (t * Protocol.is_tail_position) list
+  : t list -> (t * Protocol.Type_enclosing.is_tail_position) list
 
 (** Identify nodes introduced by recovery *)
 val is_recovered_expression : Typedtree.expression -> bool

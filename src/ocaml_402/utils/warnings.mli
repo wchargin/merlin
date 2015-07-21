@@ -96,5 +96,6 @@ val current : state ref
 val arg_spec : state -> (string * Arg.spec * string) list
 (* Parsing arguments is effectful, you might want to copy state before *)
 val copy : state -> state
+val reset : state -> from:state -> unit
 
 val dump : unit -> Yojson.Basic.json
