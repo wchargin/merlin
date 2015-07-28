@@ -124,6 +124,16 @@ let ext_ounit = {
   packages = ["oUnit";"pa_ounit.syntax"];
 }
 
+let ext_nonrec = {
+  name = "nonrec";
+  private_def = [];
+  public_def = [];
+  keywords = [
+    "nonrec", NONREC;
+  ];
+  packages = [];
+}
+
 let ext_here = {
   name = "here";
   private_def = [];
@@ -152,7 +162,7 @@ let ext_custom_printf = {
 }
 
 (* Known extensions *)
-let registry = [ext_here;ext_lwt;ext_js;ext_ounit;ext_custom_printf]
+let registry = [ext_here;ext_lwt;ext_js;ext_ounit;ext_nonrec;ext_custom_printf]
 let registry =
   List.fold_left registry ~init:String.Map.empty
     ~f:(fun map ext -> String.Map.add map ~key:ext.name ~data:ext)
@@ -175,7 +185,12 @@ let from_packages pkgs =
 
 (* Merlin expects a few extensions to be always enabled, otherwise error
    recovery may fail arbitrarily *)
-let default = [ext_any;ext_sexp_option]
+let default = [ext_any;ext_sexp_option] @
+              match My_config.ocamlversion with
+              | `OCaml_4_02_2 | `OCaml_4_03_trunk -> [ext_nonrec]
+              | _ -> []
+
+let default_kw = List.concat_map ~f:(fun ext -> ext.keywords) default
 
 (* Lexer keywords needed by extensions *)
 let keywords set =
