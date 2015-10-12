@@ -121,7 +121,13 @@ type _ request =
        | `At_origin
        ] request
   | Case_analysis
-    : Location.t -> (Location.t * string) request
+    :  Location.t -> (Location.t * string) request
+  | Path_at_position
+    :  position ->
+       [ `Module of string
+       | `Module_type of string
+       | `Value of string
+       ] list request
   | Outline
     :  outline request
   | Drop

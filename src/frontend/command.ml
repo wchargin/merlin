@@ -774,6 +774,27 @@ let dispatch_query ~verbosity buffer =
   | (Idle_job : a request) ->
     Buffer.idle_job buffer
 
+  | (Path_at_position pos : a request) ->
+    with_typer buffer @@ fun typer ->
+    let filter_component = function
+      | Browse_node.Module_binding {Typedtree.mb_name = x}
+      | Browse_node.Module_declaration {Typedtree.md_name = x} ->
+        Some (`Module x.Location.txt)
+      | Browse_node.Module_type_declaration {Typedtree.mtd_name = x} ->
+        Some (`Module_type x.Location.txt)
+      | Browse_node.Value_binding {Typedtree.vb_pat} ->
+        let ppf, to_string = Format.to_string () in
+        Printtyped.pattern 0 ppf vb_pat;
+        Some (`Value (to_string ()))
+      | Browse_node.Value_description {Typedtree.val_name} ->
+        Some (`Value val_name.Location.txt)
+      | _ -> None
+    in
+    Browse.node_at typer pos |>
+    List.Non_empty.to_list   |>
+    List.rev_map ~f:snd      |>
+    List.filter_map ~f:filter_component
+
   | _ -> raise Unhandled_command
 
   : a)
@@ -791,6 +812,7 @@ let dispatch_query ~verbosity state =
     | (Case_analysis loc : a request)       -> Some loc.Location.loc_start
     | (Boundary (_,pos) : a request)        -> Some pos
     | (Occurrences (`Ident_at pos) : a request) -> Some pos
+    | (Path_at_position pos : a request)    -> Some pos
     | (Errors : a request)                  -> Some (Lexing.make_pos (max_int, max_int))
     | _ -> None
     in

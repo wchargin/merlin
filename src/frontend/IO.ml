@@ -328,6 +328,8 @@ module Protocol_io = struct
       Request (Locate (Some path, ml_or_mli choice, mandatory_position pos))
     | [`String "outline"] ->
       Request Outline
+    | [`String "qualified"; `String "path"; `String "at"; jpos] ->
+      Request (Path_at_position (pos_of_json jpos))
     | [`String "drop"] ->
       Request Drop
     | [`String "seek"; `String "position"] ->
@@ -488,6 +490,12 @@ module Protocol_io = struct
           `List [ assoc ; `String str ]
         | Outline, outlines ->
           `List (json_of_outline outlines)
+        | Path_at_position _, components ->
+          `List (List.map components ~f:(function
+              | `Module s      -> `List [`String "module"; `String s]
+              | `Module_type s -> `List [`String "module type"; `String s]
+              | `Value s       -> `List [`String "value"; `String s]
+            ))
         | Drop, cursor ->
           json_of_cursor_state cursor
         | Boundary _, Some {Location. loc_start; loc_end} ->
