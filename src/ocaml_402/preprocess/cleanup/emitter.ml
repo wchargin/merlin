@@ -15,25 +15,60 @@ end = struct
 
   open Synthesis
 
-  type fixed = A of fixed paction list
+  type fixed = A of int * fixed paction list
 
-  let normalized_actions = Hashtbl.create 113
+  let a xs = A (Hashtbl.hash xs, xs)
+
+  module ActionH = Hashtbl.Make(struct
+      open Synthesis
+      type t = action list
+
+      let hash1 a =
+        Hashtbl.hash (match a with
+            | Abort -> 1000000
+            | Reduce p -> 2000000 + p.p_index
+            | Shift (T t) -> 3000000 + t.t_index
+            | Shift (N n) -> 4000000 + n.n_index
+            | Var (Head (st,n)) ->
+                5000000 + 1000 * st.lr1_index + n.n_index
+            | Var (Tail (st,p,pos)) ->
+                6000000 + 1000 * st.lr1_index + p.p_index * 10 + pos)
+
+      let hash h = Hashtbl.hash (List.map hash1 h)
+
+      let equal1 a b = match a, b with
+        | Abort, Abort -> true
+        | Reduce p1, Reduce p2 -> p1 == p2
+        | Shift (T t1), Shift (T t2) -> t1 == t2
+        | Shift (N n1), Shift (N n2) -> n1 == n2
+        | Var (Head (st1, n1)), Var (Head (st2, n2)) -> st1 == st2 && n1 == n2
+        | Var (Tail (st1, p1, x1)), Var (Tail (st2, p2, x2)) ->
+            st1 == st2 && p1 == p2 && x1 = x2
+        | _ -> false
+
+      let rec equal a b = match a, b with
+        | x :: xs, y :: ys -> equal1 x y && equal xs ys
+        | [], [] -> true
+        | _ -> false
+    end)
+
+  let normalized_actions = ActionH.create 113
 
   let rec normalize_actions ~flatten = function
     | [] -> []
     | [Var v] when flatten -> normalize_actions ~flatten:true (S.solution v)
     | (x :: xs) as xxs ->
-        try !(Hashtbl.find normalized_actions xxs)
+        try !(ActionH.find normalized_actions xxs)
         with Not_found ->
           let x' = normalize_action x in
           let xs' = normalize_actions ~flatten xs in
           let xxs' = x' :: xs' in
-          Hashtbl.add normalized_actions xxs (ref xxs');
+          ActionH.add normalized_actions xxs (ref xxs');
           xxs'
 
   and normalize_action = function
     | Abort | Reduce _ | Shift _ as a -> a
-    | Var v -> Var (A (normalize_actions ~flatten:true (S.solution v)))
+    | Var v -> Var (a (normalize_actions ~flatten:true (S.solution v)))
 
   let items_to_actions items =
     let prepare (st, prod, pos) =
@@ -49,19 +84,19 @@ end = struct
     let table = Hashtbl.create 113 in
     let rec get = function
       | [] -> []
-      | (x :: xs) as xxs ->
+      | (x :: xs) ->
+          let xxs = (get_one x :: get xs) in
           try
             let r, v = Hashtbl.find table xxs in
             incr r; v
           with Not_found ->
-            let xxs = (get_one x :: get xs) in
             Hashtbl.add table xxs (ref 1, xxs);
             xxs
     and get_one = function
-      | Var (A v) -> Var (A (get v))
+      | Var (A (_,v)) -> Var (a (get v))
       | x -> x
     in
-    Hashtbl.iter (fun k v -> v := get !v) normalized_actions;
+    ActionH.iter (fun k v -> v := get !v) normalized_actions;
     (* Return counter *)
     (fun v -> !(fst (Hashtbl.find table v)))
 
@@ -83,7 +118,7 @@ end = struct
           try Hashtbl.find table xxs
           with Not_found ->
             let x = match x with
-              | Var (A ys) -> Var (emit ys)
+              | Var (A (_,ys)) -> Var (emit ys)
               | Abort | Reduce _ | Shift _ as a -> a
             in
             let value = Cons (x, emit xs) in
