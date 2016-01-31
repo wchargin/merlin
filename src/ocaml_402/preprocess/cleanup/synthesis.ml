@@ -37,7 +37,13 @@ end
 
 module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
   open G
-  open A
+
+  let check_cost r =
+    assert (r >= 0.); r
+
+  let cost_of_prod p    = check_cost (1. +. A.cost_of_prod p)
+  let cost_of_symbol s  = check_cost (1. +. A.cost_of_symbol s)
+  let penalty_of_item i = check_cost (A.penalty_of_item i)
 
   let app var v = v var
 

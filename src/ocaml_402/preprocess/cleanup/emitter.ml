@@ -1,6 +1,8 @@
 open MenhirSdk.Cmly_format
 open Utils
 
+let menhir = "MenhirInterpreter"
+
 module Codeconsing (S : Synthesis.S) : sig
 
   (* Step 1: record all definitions *)
@@ -17,26 +19,26 @@ end = struct
 
   let normalized_actions = Hashtbl.create 113
 
-  let rec normalize_actions = function
+  let rec normalize_actions ~flatten = function
     | [] -> []
-    | [Var v] -> normalize_actions (S.solution v)
+    | [Var v] when flatten -> normalize_actions ~flatten:true (S.solution v)
     | (x :: xs) as xxs ->
         try !(Hashtbl.find normalized_actions xxs)
         with Not_found ->
           let x' = normalize_action x in
-          let xs' = normalize_actions xs in
+          let xs' = normalize_actions ~flatten xs in
           let xxs' = x' :: xs' in
           Hashtbl.add normalized_actions xxs (ref xxs');
           xxs'
 
   and normalize_action = function
     | Abort | Reduce _ | Shift _ as a -> a
-    | Var v -> Var (A (normalize_actions (S.solution v)))
+    | Var v -> Var (A (normalize_actions ~flatten:true (S.solution v)))
 
   let items_to_actions items =
     let prepare (st, prod, pos) =
       Var (Synthesis.Tail (st, prod, pos)) in
-    normalize_actions (List.map prepare items)
+    normalize_actions ~flatten:false (List.map prepare items)
 
   let roots : Recovery.item list list ref = ref []
 
@@ -133,18 +135,33 @@ end = struct
 
   let emit_prelude ~name ppf =
     fprintf ppf "open %s\n\n" (String.capitalize name);
-    fprintf ppf "module Default = struct\n\n";
+    fprintf ppf "module Default = struct\n";
     A.default_prelude ppf;
 
-    fprintf ppf "\nend\n\n"
+    fprintf ppf "  let value (type a) : a %s.symbol -> a = function\n" menhir;
+    let default_t t =
+      match A.default_terminal t with
+      | None -> ()
+      | Some str ->
+          fprintf ppf "    | %s.T %s.T_%s -> %s\n" menhir menhir t.t_name str
+    and default_n n =
+      match A.default_nonterminal n with
+      | None -> ()
+      | Some str ->
+          fprintf ppf "    | %s.N %s.N_%s -> %s\n" menhir menhir n.n_name str
+    in
+    Array.iter default_t G.grammar.g_terminals;
+    Array.iter default_n G.grammar.g_nonterminals;
+    fprintf ppf "    | _ -> raise Not_found\n";
+    fprintf ppf "end\n\n"
 
   let emit_defs ppf =
-    fprintf ppf "open MenhirInterpreter\n\n\
-                 type t =\n\
+    fprintf ppf "open %s\n\n" menhir;
+    fprintf ppf "type t =\n\
                 \  | Abort\n\
                 \  | Reduce of int\n\
                 \  | Shift : 'a symbol -> t\n\
-                \  | Sub of t list\n"
+                \  | Sub of t list\n\n"
 
   let emit_recovery ppf =
     let module Cons = Codeconsing(S) in

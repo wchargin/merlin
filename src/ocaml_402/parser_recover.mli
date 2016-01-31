@@ -2,14 +2,10 @@ open Parser_raw
 
 val default_value : 'a MenhirInterpreter.symbol -> 'a
 
-type action =
-  | Shift  : 'a MenhirInterpreter.symbol -> action
-  | Reduce : int -> action
-  | Sub    : action list -> action
-  | Pop    : action
+type t =
+  | Abort
+  | Reduce of int
+  | Shift : 'a MenhirInterpreter.symbol -> t
+  | Sub of t list
 
-type decision =
-  | Action of int * action
-  | Parent of (int -> int * action)
-
-val decision : int -> decision
+val recover : int -> int * (int -> t list)

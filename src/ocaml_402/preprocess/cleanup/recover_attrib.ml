@@ -6,8 +6,9 @@ module type S = sig
   val penalty_of_item : production * int -> float
   val cost_of_symbol  : symbol -> float
 
-  val default_prelude : Format.formatter -> unit
-  val default_value   : symbol -> string option
+  val default_prelude     : Format.formatter -> unit
+  val default_terminal    : terminal -> string option
+  val default_nonterminal : nonterminal -> string option
 end
 
 module Make (G : Utils.Grammar) : S = struct
@@ -77,20 +78,18 @@ module Make (G : Utils.Grammar) : S = struct
     | exception Not_found -> fallback
     | (_, stretch) -> string_of_stretch stretch
 
-  let default_value = function
-    | T t ->
-        begin match t.t_kind with
-        | `REGULAR | `ERROR | `EOF ->
-            let fallback = match t.t_type with
-              | None -> Some "()"
-              | Some _ -> None
-            in
-            Some (default_printer ?fallback t.t_attributes)
-        | `PSEUDO -> None
-        end
-    | N n ->
-        begin match n.n_kind with
-        | `REGULAR -> Some (default_printer n.n_attributes)
-        | `START -> None
-        end
+  let default_terminal t =
+    match t.t_kind with
+    | `REGULAR | `ERROR | `EOF ->
+        let fallback = match t.t_type with
+          | None -> Some "()"
+          | Some _ -> None
+        in
+        Some (default_printer ?fallback t.t_attributes)
+    | `PSEUDO -> None
+
+  let default_nonterminal n =
+    match n.n_kind with
+    | `REGULAR -> Some (default_printer n.n_attributes)
+    | `START -> None
 end
