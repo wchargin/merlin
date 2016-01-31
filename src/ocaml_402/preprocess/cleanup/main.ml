@@ -21,21 +21,23 @@ let () =
   if !name = "" then
     usage ()
 
-module S = Synthesis.Make(struct
-    let grammar = Cmly_io.read_file !name
-    let cost_of_prod _ = 0.0
-    let penalty_of_item _ = 0.0
-    let cost_of_symbol = function
-      | T _ -> 1.0
-      | N _ -> infinity
-  end)
+module G = struct
+  let grammar = Cmly_io.read_file !name
+end
+
+module A = Recover_attrib.Make(G)
+
+module S = Synthesis.Make(G)(A)
 
 let () = if !verbose then S.report Format.err_formatter
 
-module R = Recovery.Make(S)
+module R = Recovery.Make(G)(S)
 
 let () = if !verbose then R.report Format.err_formatter
 
-module E = Emitter.Make(S)
+module E = Emitter.Make(G)(A)(S)(R)
 
-let () = E.emit R.recover Format.std_formatter
+let () =
+  let name = Filename.chop_extension (Filename.basename !name) in
+  E.emit_prelude ~name Format.std_formatter;
+  E.emit_recovery Format.std_formatter

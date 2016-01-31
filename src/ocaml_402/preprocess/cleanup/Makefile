@@ -1,2 +1,2 @@
 all:
-	ocamlbuild -package menhirSdk main.native
+	ocamlbuild -tag debug -package menhirSdk main.native

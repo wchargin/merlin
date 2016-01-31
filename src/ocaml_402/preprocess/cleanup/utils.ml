@@ -1,6 +1,10 @@
 open MenhirSdk
 open Cmly_format
 
+module type Grammar = sig
+  val grammar         : grammar
+end
+
 let const c = fun _ -> c
 
 let group_assoc l =

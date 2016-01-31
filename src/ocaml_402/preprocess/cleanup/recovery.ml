@@ -10,36 +10,6 @@ type recovery = lr1_state -> int * (lr1_state option * item list) list
 let item_to_string (st, prod, p) =
   Printf.sprintf "(#%d, p%d, %d)" st.lr1_index prod.p_index p
 
-module ItemsH = Hashtbl.Make(struct
-    type t = item list
-    let hash = function
-      | (lr1, prod, pos) :: _ ->
-          Hashtbl.hash (lr1.lr1_index, prod.p_index, pos)
-      | [] -> 0
-    let rec equal a b = match a, b with
-      | a, b when a == b -> true
-      | (l1, p1, x1) :: xs, (l2, p2, x2) :: ys when
-          l1 == l2 && p1 == p2 && x1 == x2 ->
-          equal xs ys
-      | [], [] -> true
-      | _ -> false
-  end)
-
-module SynthH = Hashtbl.Make(struct
-    type t = variable
-    let hash = function
-      | Head (lr1, nt) ->
-          Hashtbl.hash (lr1.lr1_index,nt.n_index)
-      | Tail (lr1, prod, pos) ->
-          Hashtbl.hash (lr1.lr1_index, prod.p_index, pos)
-    let equal a b = match a,b with
-      | Head (l1, n1), Head (l2, n2) ->
-          l1 == l2 && n1 == n2
-      | Tail (l1, p1, x1), Tail (l2, p2, x2) ->
-          l1 == l2 && p1 == p2 && x1 == x2
-      | _ -> false
-  end)
-
 type trace = Trace of float * item list
 
 module Trace = struct
@@ -84,10 +54,12 @@ module State = struct
   let to_string (t : t) = list_fmt (list_fmt reduction_to_string) t
 end
 
-module Make (G : Solution) : sig
+module type S = sig
   val recover : recovery
   val report : Format.formatter -> unit
-end = struct
+end
+
+module Make (G : Grammar) (S : Synthesis.S) : S = struct
 
   let synthesize =
     let rec add_nt tr nt = function
@@ -128,7 +100,7 @@ end = struct
             ) else (
               (*report "adding %s at depth %d\n" prod.p_lhs.n_name pos;*)
               add_item
-                (G.cost_of (Tail (st, prod, pos)))
+                (S.cost_of (Tail (st, prod, pos)))
                 (st, prod, pos) acc
             )
           )

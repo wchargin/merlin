@@ -1,7 +1,7 @@
 open MenhirSdk.Cmly_format
 open Utils
 
-module Codeconsing (G : Synthesis.Solution) : sig
+module Codeconsing (S : Synthesis.S) : sig
 
   (* Step 1: record all definitions *)
   val record_items : Recovery.item list -> unit
@@ -19,7 +19,7 @@ end = struct
 
   let rec normalize_actions = function
     | [] -> []
-    | [Var v] -> normalize_actions (G.solution v)
+    | [Var v] -> normalize_actions (S.solution v)
     | (x :: xs) as xxs ->
         try !(Hashtbl.find normalized_actions xxs)
         with Not_found ->
@@ -31,7 +31,7 @@ end = struct
 
   and normalize_action = function
     | Abort | Reduce _ | Shift _ as a -> a
-    | Var v -> Var (A (normalize_actions (G.solution v)))
+    | Var v -> Var (A (normalize_actions (S.solution v)))
 
   let items_to_actions items =
     let prepare (st, prod, pos) =
@@ -121,16 +121,36 @@ end = struct
     defs, (fun items -> def_to_string (emit (items_to_actions items)))
 end
 
-module Make (G : Synthesis.Solution) : sig
-  val emit : Recovery.recovery -> Format.formatter -> unit
+module Make
+    (G : Utils.Grammar) (A : Recover_attrib.S)
+    (S : Synthesis.S) (R : Recovery.S) :
+sig
+  val emit_prelude : name:string -> Format.formatter -> unit
+  val emit_recovery : Format.formatter -> unit
 end = struct
 
   open Format
 
-  let emit recovery ppf =
-    let module Cons = Codeconsing(G) in
+  let emit_prelude ~name ppf =
+    fprintf ppf "open %s\n\n" (String.capitalize name);
+    fprintf ppf "module Default = struct\n\n";
+    A.default_prelude ppf;
+
+    fprintf ppf "\nend\n\n"
+
+  let emit_defs ppf =
+    fprintf ppf "open MenhirInterpreter\n\n\
+                 type t =\n\
+                \  | Abort\n\
+                \  | Reduce of int\n\
+                \  | Shift : 'a symbol -> t\n\
+                \  | Sub of t list\n"
+
+  let emit_recovery ppf =
+    let module Cons = Codeconsing(S) in
+    emit_defs ppf;
     Array.iter (fun st ->
-        let _depth, cases = recovery st in
+        let _depth, cases = R.recover st in
         List.iter (fun (_case, items) -> Cons.record_items items) cases
       ) G.grammar.g_lr1_states;
     let defs, to_string = Cons.normalize () in
@@ -138,7 +158,7 @@ end = struct
     fprintf ppf "\n";
     fprintf ppf "let recover = function\n";
     Array.iter (fun st ->
-        let depth, cases = recovery st in
+        let depth, cases = R.recover st in
         fprintf ppf "  | %d -> %d, begin function\n" st.lr1_index depth;
         List.iter (fun (case, items) ->
             let case = match case with
