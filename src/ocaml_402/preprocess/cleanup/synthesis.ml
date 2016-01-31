@@ -5,13 +5,27 @@ type variable =
   | Head of lr1_state * nonterminal
   | Tail of lr1_state * production * int
 
+let variable_to_string = function
+  | Head (st, nt) ->
+      Printf.sprintf "Head (#%d, %s)" st.lr1_index nt.n_name
+  | Tail (st, prod, pos) ->
+      Printf.sprintf "Tail (#%d, p%d, %d)" st.lr1_index prod.p_index pos
+
 type 'a paction =
   | Abort
   | Reduce of production
   | Shift  of symbol
   | Var    of 'a
 
+let paction_to_string variable_to_string = function
+  | Abort -> "Abort"
+  | Reduce prod -> "Reduce p" ^ string_of_int prod.p_index
+  | Shift  sym -> "Shift " ^ (Utils.name_of_symbol sym)
+  | Var v -> "Var (" ^ variable_to_string v ^ ")"
+
 type action = variable paction
+
+let action_to_string = paction_to_string variable_to_string
 
 module type S = sig
   val cost_of  : variable -> float

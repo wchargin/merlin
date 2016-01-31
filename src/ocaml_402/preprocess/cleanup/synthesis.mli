@@ -4,13 +4,19 @@ type variable =
   | Head of lr1_state * nonterminal
   | Tail of lr1_state * production * int
 
+val variable_to_string : variable -> string
+
 type 'a paction =
   | Abort
   | Reduce of production
   | Shift  of symbol
   | Var    of 'a
 
+val paction_to_string : ('a -> string) -> 'a paction -> string
+
 type action = variable paction
+
+val action_to_string : action -> string
 
 module type S = sig
   val cost_of  : variable -> float
