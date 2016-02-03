@@ -201,26 +201,36 @@ end = struct
   let emit_recovery ppf =
     let module Cons = Codeconsing(S) in
     emit_defs ppf;
+
+    fprintf ppf "let static_depth =\n  [|";
+    Array.iter (fun st -> fprintf ppf "%d; " (fst (R.recover st)))
+      G.grammar.g_lr1_states;
+    fprintf ppf "|]\n";
+
     Array.iter (fun st ->
         let _depth, cases = R.recover st in
         List.iter (fun (_case, items) -> Cons.record_items items) cases
       ) G.grammar.g_lr1_states;
+
     let defs, to_string = Cons.normalize () in
     List.iter (fun (k, v) -> fprintf ppf "let %s = %s\n" k v) defs;
     fprintf ppf "\n";
+
     fprintf ppf "let recover = function\n";
     Array.iter (fun st ->
-        let depth, cases = R.recover st in
-        fprintf ppf "  | %d -> %d, begin function\n" st.lr1_index depth;
-        List.iter (fun (case, items) ->
+        let _, branches = R.recover st in
+        branches
+        |> List.map (fun (case, items) ->
             let case = match case with
-              | None -> -1
-              | Some st -> st.lr1_index
+              | None -> "-1"
+              | Some st -> string_of_int st.lr1_index
             in
-            fprintf ppf "    | %d -> %s\n" case (to_string items)
-          ) cases;
-        fprintf ppf "    | _ -> raise Not_found\n";
-        fprintf ppf "  end\n";
+            (to_string items, case))
+        |> group_assoc
+        |> List.iter (fun (items, cases) ->
+            fprintf ppf "  | %d, (%s) -> %s\n"
+              st.lr1_index (String.concat " | " cases) items
+          )
       ) G.grammar.g_lr1_states;
     fprintf ppf "  | _ -> raise Not_found\n"
 
