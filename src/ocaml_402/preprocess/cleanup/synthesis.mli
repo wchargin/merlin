@@ -1,24 +1,26 @@
 open MenhirSdk.Cmly_format
 
-type variable =
-  | Head of lr1_state * nonterminal
-  | Tail of lr1_state * production * int
-
-val variable_to_string : variable -> string
-
-type 'a paction =
-  | Abort
-  | Reduce of production
-  | Shift  of symbol
-  | Var    of 'a
-
-val paction_to_string : ('a -> string) -> 'a paction -> string
-
-type action = variable paction
-
-val action_to_string : action -> string
-
 module type S = sig
+  module G : Utils.G
+
+  type variable =
+    | Head of G.lr1 * G.nonterminal
+    | Tail of G.lr1 * G.production * int
+
+  val variable_to_string : variable -> string
+
+  type 'a paction =
+    | Abort
+    | Reduce of G.production
+    | Shift  of G.symbol
+    | Var    of 'a
+
+  val paction_to_string : ('a -> string) -> 'a paction -> string
+
+  type action = variable paction
+
+  val action_to_string : action -> string
+
   val cost_of  : variable -> float
   val cost_of_action  : action -> float
   val cost_of_actions : action list -> float
@@ -26,4 +28,4 @@ module type S = sig
   val report   : Format.formatter -> unit
 end
 
-module Make (G : Utils.Grammar) (A : Recover_attrib.S) : S
+module Make (G : Utils.G) (A : Recover_attrib.S with module G = G) : S with module G = G

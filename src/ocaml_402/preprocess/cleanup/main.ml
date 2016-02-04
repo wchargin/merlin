@@ -21,9 +21,9 @@ let () =
   if !name = "" then
     usage ()
 
-module G = struct
-  let grammar = Cmly_io.read_file !name
-end
+module G = Cmly_io.Make_grammar(struct
+    let grammar = Cmly_io.read_file !name
+  end)
 
 module A = Recover_attrib.Make(G)
 
@@ -31,25 +31,29 @@ let () =
   let open Format in
   let ppf = Format.err_formatter in
   if !verbose then begin
-    Array.iter (fun st ->
-        fprintf ppf "\n# LR(1) state #%d\n\n" st.lr1_index;
+    let open G in
+    Lr1.iter (fun (st : lr1) ->
+        fprintf ppf "\n# LR(1) state #%d\n\n" (st :> int);
         fprintf ppf "Items:\n";
-        Utils.print_table ppf
-          (Utils.items_table (Array.to_list st.lr1_lr0.lr0_items));
+        Print.itemset ppf (Lr0.items (Lr1.lr0 st));
         fprintf ppf "Transitions:\n";
-        Array.iter (fun (sym,st') ->
-            fprintf ppf " - on %s, goto #%d\n"
-              (Utils.name_of_symbol sym) st'.lr1_index
-          ) st.lr1_transitions;
+        List.iter (fun (sym,(st' : lr1)) ->
+            fprintf ppf " - on %a, goto #%d\n"
+              Print.symbol sym
+              (st' :> int)
+          ) (Lr1.transitions st);
         fprintf ppf "Reductions:\n";
-        Array.iter (fun (t,ps) ->
-            fprintf ppf " - on %s, reduce p%d\n" t.t_name (List.hd ps).p_index
-          ) st.lr1_reductions;
-      ) G.grammar.g_lr1_states;
-    Array.iter (fun p ->
-        fprintf ppf "\n# Producion p%d\n" p.p_index;
-        Utils.print_table ppf (Utils.items_table [p,-1]);
-      ) G.grammar.g_productions
+        List.iter (fun (t,ps) ->
+            let p : production = List.hd ps in
+            fprintf ppf " - on %a, reduce %d:\n  %a\n"
+              Print.terminal t
+              (p :> int) Print.production p
+          ) (Lr1.reductions st);
+      );
+    Production.iter (fun (p : production) ->
+        fprintf ppf "\n# Production p%d\n%a"
+          (p :> int) Print.production p
+      );
   end
 
 module S = Synthesis.Make(G)(A)

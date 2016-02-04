@@ -1,9 +1,7 @@
 open MenhirSdk
 open Cmly_format
 
-module type Grammar = sig
-  val grammar         : grammar
-end
+module type G = Cmly_io.GRAMMAR
 
 let const c = fun _ -> c
 
@@ -66,68 +64,3 @@ let string_of_stretch s =
 let string_of_type = function
   | Stretch.Inferred s -> s
   | Stretch.Declared s -> string_of_stretch s
-
-let name_of_symbol = function
-  | T t -> t.t_name
-  | N n -> n.n_name
-
-let items_table ?(annots=[]) items =
-  let last_lhs = ref (-1) in
-  let prepare (p,pos) annot =
-    let rhs = Array.map (fun (sym, id, _) ->
-        if id <> "" && id.[0] <> '_' then
-          "(" ^ id ^ " = " ^ name_of_symbol sym ^ ")"
-        else name_of_symbol sym)
-        p.p_rhs
-    in
-    if pos >= 0 && pos < Array.length rhs then
-      rhs.(pos) <- ". " ^ rhs.(pos)
-    else if pos > 0 && pos = Array.length rhs then
-      rhs.(pos - 1) <- rhs.(pos - 1) ^ " .";
-    let rhs = Array.to_list rhs in
-    let rhs =
-      if !last_lhs = p.p_lhs.n_index then
-        "" :: "  |" :: rhs
-      else
-        (last_lhs := p.p_lhs.n_index;
-         p.p_lhs.n_name :: "::=" :: rhs)
-    and annot =
-      "" :: "" :: annot
-    in
-    [rhs; annot]
-  in
-  let annots =
-    annots @
-    Array.to_list (Array.make (List.length items - List.length annots) [])
-  in
-  List.concat (List.map2 prepare items annots)
-
-let print_table ppf ?(prefix="") ?(sep=" ") table =
-  let align_tabular rows =
-    let rec lengths l acc = function
-      | [] when l = -1 -> []
-      | [] ->
-          l :: lengths (-1) [] acc
-      | [] :: rows ->
-          lengths l acc rows
-      | (col :: cols) :: rows ->
-          lengths (max l (String.length col)) (cols :: acc) rows
-    in
-    let lengths = lengths (-1) [] rows in
-    let rec adjust_length lengths cols = match lengths, cols with
-      | l :: ls, c :: cs ->
-          let pad = l - String.length c in
-          let c =
-            if pad = 0 then c
-            else c ^ String.make pad ' '
-          in
-          c :: adjust_length ls cs
-      | _, [] -> []
-      | [], _ -> assert false
-    in
-    List.map (adjust_length lengths) rows
-  in
-  let table = align_tabular table in
-  List.iter
-    (fun line -> Format.fprintf ppf "%s%s\n" prefix (String.concat sep line))
-    table

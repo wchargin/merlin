@@ -3,69 +3,77 @@ open Cmly_format
 open Utils
 open Synthesis
 
-type item = lr1_state * production * int
-
-type recovery = lr1_state -> int * (lr1_state option * item list) list
-
-let item_to_string (st, prod, p) =
-  Printf.sprintf "(#%d, p%d, %d)" st.lr1_index prod.p_index p
-
-type trace = Trace of float * item list
-
-module Trace = struct
-  type t = trace
-  let min (Trace (c1, _) as tr1) (Trace (c2, _) as tr2) =
-    arg_min_float (fun (Trace (c,_)) -> c) tr1 tr2
-
-  let cat (Trace (c1, tr1)) (Trace (c2, tr2)) =
-    Trace (c1 +. c2, tr1 @ tr2)
-
-  let to_string (Trace (c1, tr)) =
-    Printf.sprintf "Trace (%f, %s)"
-      c1 (list_fmt item_to_string tr)
-end
-
-module State = struct
-  type level = (nonterminal * Trace.t) list
-  type t = level list
-
-  let rec merge_level l1 l2 : level = match l1, l2 with
-    | [], l -> l
-    | l, [] -> l
-    | ((nt1, c1) :: xs1), (x2 :: xs2) ->
-      let (nt2, c2) = x2 in
-      match compare nt1.n_index nt2.n_index with
-      | 0 ->
-        let x = (nt1, Trace.min c1 c2) in
-        x :: merge_level xs1 xs2
-      | n when n > 0 -> x2 :: merge_level l1 xs2
-      | _ -> (nt1, c1) :: merge_level xs1 l2
-
-  let rec merge l1 l2 : t = match l1, l2 with
-    | [], l -> l
-    | l, [] -> l
-    | (x1 :: l1), (x2 :: l2) ->
-      let x' = merge_level x1 x2 in
-      x' :: merge l1 l2
-
-  let reduction_to_string (n, tr) =
-    Printf.sprintf "(%s, %s)" n.n_name (Trace.to_string tr)
-
-  let to_string (t : t) = list_fmt (list_fmt reduction_to_string) t
-end
-
 module type S = sig
+  module G : Utils.G
+
+  type item = G.lr1 * G.production * int
+  type recovery = G.lr1 -> int * (G.lr1 option * item list) list
+
   val recover : recovery
   val report : Format.formatter -> unit
 end
 
-module Make (G : Grammar) (S : Synthesis.S) : S = struct
+module Make (G : Cmly_io.GRAMMAR)
+    (S : Synthesis.S with module G = G) : S with module G = G = struct
+  module G = G
+  open G
+
+  type item = lr1 * production * int
+
+  type recovery = lr1 -> int * (lr1 option * item list) list
+
+  let item_to_string (st, prod, p) =
+    Printf.sprintf "(#%d, p%d, %d)" (Lr1.to_int st) (Production.to_int prod) p
+
+  type trace = Trace of float * item list
+
+  module Trace = struct
+    type t = trace
+    let min (Trace (c1, _) as tr1) (Trace (c2, _) as tr2) =
+      arg_min_float (fun (Trace (c,_)) -> c) tr1 tr2
+
+    let cat (Trace (c1, tr1)) (Trace (c2, tr2)) =
+      Trace (c1 +. c2, tr1 @ tr2)
+
+    let to_string (Trace (c1, tr)) =
+      Printf.sprintf "Trace (%f, %s)"
+        c1 (list_fmt item_to_string tr)
+  end
+
+  module State = struct
+    type level = (nonterminal * Trace.t) list
+    type t = level list
+
+    let rec merge_level l1 l2 : level = match l1, l2 with
+      | [], l -> l
+      | l, [] -> l
+      | ((nt1, c1) :: xs1), (x2 :: xs2) ->
+          let (nt2, c2) = x2 in
+          match compare nt1 nt2 with
+          | 0 ->
+              let x = (nt1, Trace.min c1 c2) in
+              x :: merge_level xs1 xs2
+          | n when n > 0 -> x2 :: merge_level l1 xs2
+          | _ -> (nt1, c1) :: merge_level xs1 l2
+
+    let rec merge l1 l2 : t = match l1, l2 with
+      | [], l -> l
+      | l, [] -> l
+      | (x1 :: l1), (x2 :: l2) ->
+          let x' = merge_level x1 x2 in
+          x' :: merge l1 l2
+
+    let reduction_to_string (n, tr) =
+      Printf.sprintf "(%s, %s)" (Nonterminal.name n) (Trace.to_string tr)
+
+    let to_string (t : t) = list_fmt (list_fmt reduction_to_string) t
+  end
 
   let synthesize =
     let rec add_nt tr nt = function
       | [] -> [(nt, tr)]
       | x :: xs ->
-          let c = compare nt.n_index (fst x).n_index in
+          let c = compare nt (fst x) in
           if c = 0 then (nt, Trace.min tr (snd x)) :: xs
           else if c < 0 then
             (nt, tr) :: xs
@@ -84,14 +92,14 @@ module Make (G : Grammar) (S : Synthesis.S) : S = struct
           | _ :: xs -> xs
         in
         let rec aux stack = function
-          | 0 -> add_nt (Trace (cost, [item])) prod.p_lhs (stack_hd stack) ::
-                 stack_tl stack
+          | 0 -> add_nt (Trace (cost, [item])) (Production.lhs prod)
+                   (stack_hd stack) :: stack_tl stack
           | n -> stack_hd stack :: aux (stack_tl stack) (n - 1)
         in
         aux stack pos
     in
-    let table = Array.map (fun st ->
-        Array.fold_left (fun acc (prod, pos) ->
+    Lr1.tabulate (fun st ->
+        List.fold_left (fun acc (prod, pos) ->
             if pos = 0 then (
               (*if prod.p_kind = `START then ( *)
               (* pos = 0 means we are on an initial state *)
@@ -100,23 +108,22 @@ module Make (G : Grammar) (S : Synthesis.S) : S = struct
             ) else (
               (*report "adding %s at depth %d\n" prod.p_lhs.n_name pos;*)
               add_item
-                (S.cost_of (Tail (st, prod, pos)))
+                (S.cost_of (S.Tail (st, prod, pos)))
                 (st, prod, pos) acc
             )
           )
-          [] st.lr1_lr0.lr0_items
-      ) G.grammar.g_lr1_states
-    in
-    fun st -> table.(st.lr1_index)
+          [] (Lr0.items (Lr1.lr0 st))
+      )
 
   let step st ntss =
     let seen = ref CompressedBitSet.empty in
     let rec aux = function
       | [] -> []
       | ((nt, tr) :: x) :: xs
-        when not (CompressedBitSet.mem nt.n_index !seen) && not (nt.n_kind = `START) ->
-          seen := CompressedBitSet.add nt.n_index !seen;
-          let st' = array_assoc st.lr1_transitions (N nt) in
+        when not (CompressedBitSet.mem (Nonterminal.to_int nt) !seen) &&
+             not (Nonterminal.kind nt = `START) ->
+          seen := CompressedBitSet.add (Nonterminal.to_int nt) !seen;
+          let st' = List.assoc (N nt) (Lr1.transitions st) in
           let xs' = synthesize st' in
           let xs' = match xs' with
             | [] -> []
@@ -130,29 +137,30 @@ module Make (G : Grammar) (S : Synthesis.S) : S = struct
     in
     aux ntss
 
-  let init st = ((st, [st.lr1_index]), step st (synthesize st))
+  let init st = ((st, [st]), step st (synthesize st))
 
   let pred =
     (* Compute lr1 predecessor relation *)
-    let tbl1 = Array.make (Array.length G.grammar.g_lr1_states) [] in
+    let tbl1 = Array.make Lr1.count [] in
     let revert_transition s1 (sym,s2) =
-      assert (match s2.lr1_lr0.lr0_incoming with
+      assert (match Lr0.incoming (Lr1.lr0 s2) with
           | None -> false
           | Some sym' -> sym = sym');
-      tbl1.(s2.lr1_index) <- s1 :: tbl1.(s2.lr1_index)
+      tbl1.(Lr1.to_int s2) <- s1 :: tbl1.(Lr1.to_int s2)
     in
-    Array.iter
-      (fun lr1 -> Array.iter (revert_transition lr1) lr1.lr1_transitions)
-      G.grammar.g_lr1_states;
-    (fun lr1 -> tbl1.(lr1.lr1_index))
+    Lr1.iter
+      (fun lr1 -> List.iter (revert_transition lr1) (Lr1.transitions lr1));
+    (fun lr1 -> tbl1.(Lr1.to_int lr1))
 
   let expand ((st, sts), nts) =
-    List.map (fun st' -> ((st', st'.lr1_index :: sts), step st' nts)) (pred st)
+    List.map (fun st' -> ((st', st' :: sts), step st' nts)) (pred st)
 
   let recover st =
     (* How big is the known prefix of the stack *)
-    let pos = Array.fold_left (fun pos (_, pos') -> max pos pos')
-        (snd st.lr1_lr0.lr0_items.(0)) st.lr1_lr0.lr0_items
+    let pos =
+      let items = Lr0.items (Lr1.lr0 st) in
+      List.fold_left (fun pos (_, pos') -> max pos pos')
+        (snd (List.hd items)) (List.tl items)
     in
     (* Walk this prefix *)
     let traces =
@@ -193,9 +201,7 @@ module Make (G : Grammar) (S : Synthesis.S) : S = struct
           (process_trace trace)
       ) traces
 
-  let recover =
-    let a = Array.map recover G.grammar.g_lr1_states in
-    fun lr1 -> a.(lr1.lr1_index)
+  let recover = Lr1.tabulate recover
 
   let report ppf = ()
 end

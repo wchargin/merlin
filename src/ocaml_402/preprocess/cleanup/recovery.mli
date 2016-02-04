@@ -1,12 +1,11 @@
-open MenhirSdk.Cmly_format
-
-type item = lr1_state * production * int
-
-type recovery = lr1_state -> int * (lr1_state option * item list) list
-
 module type S = sig
+  module G : Utils.G
+
+  type item = G.lr1 * G.production * int
+  type recovery = G.lr1 -> int * (G.lr1 option * item list) list
+
   val recover : recovery
   val report : Format.formatter -> unit
 end
 
-module Make (G : Utils.Grammar) (S : Synthesis.S) : S
+module Make (G : Utils.G) (S : Synthesis.S with module G = G) : S with module G = G

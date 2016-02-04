@@ -1,33 +1,27 @@
 open MenhirSdk.Cmly_format
 open Utils
 
-type variable =
-  | Head of lr1_state * nonterminal
-  | Tail of lr1_state * production * int
-
-let variable_to_string = function
-  | Head (st, nt) ->
-      Printf.sprintf "Head (#%d, %s)" st.lr1_index nt.n_name
-  | Tail (st, prod, pos) ->
-      Printf.sprintf "Tail (#%d, p%d, %d)" st.lr1_index prod.p_index pos
-
-type 'a paction =
-  | Abort
-  | Reduce of production
-  | Shift  of symbol
-  | Var    of 'a
-
-let paction_to_string variable_to_string = function
-  | Abort -> "Abort"
-  | Reduce prod -> "Reduce p" ^ string_of_int prod.p_index
-  | Shift  sym -> "Shift " ^ (Utils.name_of_symbol sym)
-  | Var v -> "Var (" ^ variable_to_string v ^ ")"
-
-type action = variable paction
-
-let action_to_string = paction_to_string variable_to_string
-
 module type S = sig
+  module G : Utils.G
+
+  type variable =
+    | Head of G.lr1 * G.nonterminal
+    | Tail of G.lr1 * G.production * int
+
+  val variable_to_string : variable -> string
+
+  type 'a paction =
+    | Abort
+    | Reduce of G.production
+    | Shift  of G.symbol
+    | Var    of 'a
+
+  val paction_to_string : ('a -> string) -> 'a paction -> string
+
+  type action = variable paction
+
+  val action_to_string : action -> string
+
   val cost_of  : variable -> float
   val cost_of_action  : action -> float
   val cost_of_actions : action list -> float
@@ -35,8 +29,39 @@ module type S = sig
   val report   : Format.formatter -> unit
 end
 
-module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
+module Make (G : Utils.G) (A : Recover_attrib.S with module G = G)
+  : S with module G = G =
+struct
+  module G = G
   open G
+
+  type variable =
+    | Head of lr1 * nonterminal
+    | Tail of lr1 * production * int
+
+  let variable_to_string = function
+    | Head (st, n) ->
+        Printf.sprintf "Head (#%d, %s)"
+          (Lr1.to_int st) (Nonterminal.name n)
+    | Tail (st, prod, pos) ->
+        Printf.sprintf "Tail (#%d, p%d, %d)"
+          (Lr1.to_int st) (Production.to_int prod) pos
+
+  type 'a paction =
+    | Abort
+    | Reduce of production
+    | Shift  of symbol
+    | Var    of 'a
+
+  let paction_to_string variable_to_string = function
+    | Abort -> "Abort"
+    | Reduce prod -> "Reduce p" ^ string_of_int (Production.to_int prod)
+    | Shift  sym -> "Shift " ^ (symbol_name sym)
+    | Var v -> "Var (" ^ variable_to_string v ^ ")"
+
+  type action = variable paction
+
+  let action_to_string = paction_to_string variable_to_string
 
   let check_cost r =
     assert (r >= 0.); r
@@ -50,7 +75,7 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
   let var var = match var with
     | Head _ -> app var
     | Tail (_,prod,pos) ->
-        if pos < Array.length prod.p_rhs then
+        if pos < Array.length (Production.rhs prod) then
           app var
         else
           let cost = cost_of_prod prod in
@@ -58,23 +83,23 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
 
   let cost_of = function
     | Head (st, n) ->
-        let acc = Array.fold_left
+        let acc = List.fold_left
             (fun acc (sym, st') ->
-               Array.fold_left (fun acc (prod, pos) ->
-                   if pos = 1 && prod.p_lhs = n then
+               List.fold_left (fun acc (prod, pos) ->
+                   if pos = 1 && Production.lhs prod = n then
                      var (Tail (st, prod, 0)) :: acc
                    else acc
-                 ) acc st'.lr1_lr0.lr0_items
-            ) [] st.lr1_transitions
+                 ) acc (Lr0.items (Lr1.lr0 st'))
+            ) [] (Lr1.transitions st)
         in
-        let cost = Array.fold_left
+        let cost = List.fold_left
             (fun acc (_, prods) ->
                List.fold_left (fun acc prod ->
-                   if prod.p_rhs = [||] && prod.p_lhs = n then
+                   if Production.rhs prod = [||] && Production.lhs prod = n then
                      min_float (cost_of_prod prod) acc
                    else acc
                  ) acc prods
-            ) infinity st.lr1_reductions
+            ) infinity (Lr1.reductions st)
         in
         if cost < infinity || acc <> [] then
           (fun v -> List.fold_left (fun cost f -> min_float cost (f v)) cost acc)
@@ -85,11 +110,11 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
         if penalty = infinity then
           const infinity
         else
-        if pos >= Array.length prod.p_rhs then
+        if pos >= Array.length (Production.rhs prod) then
           const (cost_of_prod prod)
         else
           let head =
-            let sym, _, _ = prod.p_rhs.(pos) in
+            let sym, _, _ = (Production.rhs prod).(pos) in
             let cost = cost_of_symbol sym in
             if cost < infinity then const cost
             else match sym with
@@ -97,7 +122,8 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
               | N n -> var (Head (st, n))
           in
           let tail =
-            match array_assoc st.lr1_transitions (fst3 prod.p_rhs.(pos)) with
+            let sym, _, _ = (Production.rhs prod).(pos) in
+            match List.assoc sym (Lr1.transitions st) with
             | st' -> var (Tail (st', prod, pos + 1))
             | exception Not_found ->
                 (*report "no transition: #%d (%d,%d)\n" st.lr1_index prod.p_index pos;*)
@@ -135,29 +161,27 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
   let solution = function
     | Head (st, n) ->
         let acc = Abort in
-        let acc =
-          Array.fold_left
+        let acc = List.fold_left
             (fun acc (sym, st') ->
-               Array.fold_left (fun acc (prod, pos) ->
-                   if pos = 1 && prod.p_lhs = n then
+               List.fold_left (fun acc (prod, pos) ->
+                   if pos = 1 && Production.lhs prod = n then
                      select (Var (Tail (st, prod, 0))) acc
                    else acc
-                 ) acc st'.lr1_lr0.lr0_items
-            ) acc st.lr1_transitions
+                 ) acc (Lr0.items (Lr1.lr0 st'))
+            ) acc (Lr1.transitions st)
         in
-        let acc =
-          Array.fold_left
+        let acc = List.fold_left
             (fun acc (_, prods) ->
                List.fold_left (fun acc prod ->
-                   if prod.p_rhs = [||] && prod.p_lhs = n then
+                   if Production.rhs prod = [||] && Production.lhs prod = n then
                      select (Reduce prod) acc
                    else acc
                  ) acc prods
-            ) acc st.lr1_reductions
+            ) acc (Lr1.reductions st)
         in
         [acc]
 
-    | Tail (st, prod, pos) when pos = Array.length prod.p_rhs ->
+    | Tail (st, prod, pos) when pos = Array.length (Production.rhs prod) ->
         [Reduce prod]
 
     | Tail (st, prod, pos) ->
@@ -166,7 +190,7 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
           [Abort]
         else
           let head =
-            let sym, _, _ = prod.p_rhs.(pos) in
+            let sym, _, _ = (Production.rhs prod).(pos) in
             let cost = cost_of_symbol sym in
             if cost < infinity then
               Shift sym
@@ -175,7 +199,8 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
               | N n -> Var (Head (st, n))
           in
           let tail =
-            match array_assoc st.lr1_transitions (fst3 prod.p_rhs.(pos)) with
+            let sym, _, _ = (Production.rhs prod).(pos) in
+            match List.assoc sym (Lr1.transitions st) with
             | st' -> Var (Tail (st', prod, pos + 1))
             | exception Not_found ->
                 Abort
@@ -187,26 +212,26 @@ module Make (G : Grammar) (A : Recover_attrib.S) : S = struct
 
   let report ppf =
     let open Format in
-    let solutions =
-      Array.fold_left (fun acc st ->
-          match Array.fold_left (fun (item, cost) (prod, pos) ->
+    let solutions = Lr1.fold
+        (fun st acc ->
+          match List.fold_left (fun (item, cost) (prod, pos) ->
               let cost' = cost_of (Tail (st, prod, pos)) in
               assert (cost' = cost_of_actions (solution (Tail (st, prod, pos))));
               if cost' < cost then (Some (prod, pos), cost') else (item, cost)
-            ) (None, infinity) st.lr1_lr0.lr0_items
+            ) (None, infinity) (Lr0.items (Lr1.lr0 st))
           with
           | None, _ ->
-              fprintf ppf "no synthesis from %d\n" st.lr1_index;
+              fprintf ppf "no synthesis from %d\n" (Lr1.to_int st);
               acc
-          | Some item, cost -> (item, (cost, st.lr1_index)) :: acc
-        ) [] grammar.g_lr1_states
+          | Some item, cost -> (item, (cost, st)) :: acc
+        ) []
     in
     List.iter (fun (item, states) ->
-        fprintf ppf "# Item (%d,%d)\n" (fst item).p_index (snd item);
-        print_table ppf (items_table [item]);
+        fprintf ppf "# Item (%d,%d)\n" (Production.to_int (fst item)) (snd item);
+        Print.item ppf item;
         List.iter (fun (cost, states) ->
             fprintf ppf "at cost %f from states %s\n\n"
-              cost (list_fmt string_of_int states)
+              cost (list_fmt (fun x -> string_of_int (Lr1.to_int x)) states)
           ) (group_assoc states)
       ) (group_assoc solutions)
 end

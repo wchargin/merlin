@@ -1,67 +1,55 @@
 open Utils
-open MenhirSdk.Cmly_format
 
 module type S = sig
-  val cost_of_prod    : production -> float
-  val penalty_of_item : production * int -> float
-  val cost_of_symbol  : symbol -> float
+  module G : G
+
+  val cost_of_prod    : G.production -> float
+  val penalty_of_item : G.production * int -> float
+  val cost_of_symbol  : G.symbol -> float
 
   val default_prelude     : Format.formatter -> unit
-  val default_terminal    : terminal -> string option
-  val default_nonterminal : nonterminal -> string option
+  val default_terminal    : G.terminal -> string option
+  val default_nonterminal : G.nonterminal -> string option
 end
 
-module Make (G : Utils.Grammar) : S = struct
+module Make (G : G) : S with module G = G = struct
+  module G = G
   open G
 
-  let table_terminal f =
-    let table = Array.map f grammar.g_terminals in
-    fun t -> table.(t.t_index)
-
-  let table_nonterminal f =
-    let table = Array.map f grammar.g_nonterminals in
-    fun n -> table.(n.n_index)
-
-  let table_symbol f =
-    let ft = table_terminal (fun t -> f (T t)) in
-    let fn = table_nonterminal (fun n -> f (N n)) in
-    function
-    | T t -> ft t
-    | N n -> fn n
-
-  let table_production f =
-    let table = Array.map f grammar.g_productions in
-    fun p -> table.(p.p_index)
-
-  let cost_of_attributes attrs =
+  let cost_of_attributes prj attrs =
     List.fold_left
       (fun total attr ->
          if is_attribute "cost" attr then
            total +. float_of_string (string_of_stretch (snd attr))
          else total)
-      0. attrs
+      0. (prj attrs)
 
   let cost_of_symbol =
-    let measure ~default attrs =
-      if List.exists (is_attribute "recovery") attrs then
-        cost_of_attributes attrs
+    let measure ~default prj attrs =
+      if List.exists (is_attribute "recovery") (prj attrs) then
+        cost_of_attributes prj attrs
       else default
     in
-    table_symbol (function
-        | T t when t.t_type = None ->
-            measure ~default:0.0 t.t_attributes
-        | T t ->
-            measure ~default:infinity t.t_attributes
-        | N n ->
-            measure ~default:infinity n.n_attributes
-      )
+    let ft = Terminal.tabulate
+        (fun t ->
+           if Terminal.typ t = None
+           then measure ~default:0.0 Terminal.attributes t
+           else measure ~default:infinity Terminal.attributes t)
+    in
+    let fn =
+      Nonterminal.tabulate (measure ~default:infinity Nonterminal.attributes)
+    in
+    function
+    | T t -> ft t
+    | N n -> fn n
 
   let cost_of_prod =
-    table_production (fun p -> cost_of_attributes p.p_attributes)
+    Production.tabulate (cost_of_attributes Production.attributes)
 
   let penalty_of_item =
-    let f = table_production @@ fun p ->
-      Array.map (fun (_,_,a) -> cost_of_attributes a) p.p_rhs
+    let f = Production.tabulate @@ fun p ->
+      Array.map (cost_of_attributes (fun (_,_,a) -> a))
+        (Production.rhs p)
     in
     fun (p,i) ->
       let costs = f p in
@@ -71,7 +59,7 @@ module Make (G : Utils.Grammar) : S = struct
     List.iter (fun a ->
         if is_attribute "header" a || is_attribute "recovery.header" a then
           Format.fprintf ppf "%s\n" (string_of_stretch (snd a))
-      ) grammar.g_attributes
+      ) Grammar.attributes
 
   let default_printer ?(fallback="raise Not_found") attrs =
     match List.find (is_attribute "recovery") attrs with
@@ -79,17 +67,17 @@ module Make (G : Utils.Grammar) : S = struct
     | (_, stretch) -> string_of_stretch stretch
 
   let default_terminal t =
-    match t.t_kind with
+    match Terminal.kind t with
     | `REGULAR | `ERROR | `EOF ->
-        let fallback = match t.t_type with
+        let fallback = match Terminal.typ t with
           | None -> Some "()"
           | Some _ -> None
         in
-        Some (default_printer ?fallback t.t_attributes)
+        Some (default_printer ?fallback (Terminal.attributes t))
     | `PSEUDO -> None
 
   let default_nonterminal n =
-    match n.n_kind with
-    | `REGULAR -> Some (default_printer n.n_attributes)
+    match Nonterminal.kind n with
+    | `REGULAR -> Some (default_printer (Nonterminal.attributes n))
     | `START -> None
 end
