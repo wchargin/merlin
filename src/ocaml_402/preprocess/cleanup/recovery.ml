@@ -139,21 +139,8 @@ module Make (G : Cmly_io.GRAMMAR)
 
   let init st = ((st, [st]), step st (synthesize st))
 
-  let pred =
-    (* Compute lr1 predecessor relation *)
-    let tbl1 = Array.make Lr1.count [] in
-    let revert_transition s1 (sym,s2) =
-      assert (match Lr0.incoming (Lr1.lr0 s2) with
-          | None -> false
-          | Some sym' -> sym = sym');
-      tbl1.(Lr1.to_int s2) <- s1 :: tbl1.(Lr1.to_int s2)
-    in
-    Lr1.iter
-      (fun lr1 -> List.iter (revert_transition lr1) (Lr1.transitions lr1));
-    (fun lr1 -> tbl1.(Lr1.to_int lr1))
-
   let expand ((st, sts), nts) =
-    List.map (fun st' -> ((st', st' :: sts), step st' nts)) (pred st)
+    List.map (fun st' -> ((st', st' :: sts), step st' nts)) (S.pred st)
 
   let recover st =
     (* How big is the known prefix of the stack *)

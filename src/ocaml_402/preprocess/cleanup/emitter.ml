@@ -33,7 +33,7 @@ end = struct
           xxs'
 
   and normalize_action = function
-    | Abort | Reduce _ | Shift _ as a -> a
+    | Abort | Reduce _ | Shift _ | Pop as a -> a
     | Var v -> Var (A (normalize_actions ~flatten:true (S.solution v)))
 
   let items_to_actions items =
@@ -85,7 +85,7 @@ end = struct
           with Not_found ->
             let x = match x with
               | Var (A ys) -> Var (emit ys)
-              | Abort | Reduce _ | Shift _ as a -> a
+              | Pop | Abort | Reduce _ | Shift _ as a -> a
             in
             let value = Cons (x, emit xs) in
             if counter xxs = 1 then value else (
@@ -106,6 +106,7 @@ end = struct
       | Cons (act, xs) -> aux (one act :: acc) xs
 
     and one = function
+      | Pop -> "Pop"
       | Abort -> "Abort"
       | Reduce prod -> Printf.sprintf "Reduce %d" (Production.to_int prod)
       | Shift (T t) -> Printf.sprintf "Shift (T T_%s)" (Terminal.name t)
@@ -162,6 +163,7 @@ end = struct
     fprintf ppf "open %s\n\n" menhir;
     fprintf ppf "type t =\n\
                 \  | Abort\n\
+                \  | Pop\n\
                 \  | Reduce of int\n\
                 \  | Shift : 'a symbol -> t\n\
                 \  | Sub of t list\n\n"

@@ -12,6 +12,7 @@ module type S = sig
 
   type 'a paction =
     | Abort
+    | Pop
     | Reduce of G.production
     | Shift  of G.symbol
     | Var    of 'a
@@ -21,6 +22,8 @@ module type S = sig
   type action = variable paction
 
   val action_to_string : action -> string
+
+  val pred : G.lr1 -> G.lr1 list
 
   val cost_of  : variable -> float
   val cost_of_action  : action -> float
@@ -34,6 +37,19 @@ module Make (G : Utils.G) (A : Recover_attrib.S with module G = G)
 struct
   module G = G
   open G
+
+  let pred =
+    (* Compute lr1 predecessor relation *)
+    let tbl1 = Array.make Lr1.count [] in
+    let revert_transition s1 (sym,s2) =
+      assert (match Lr0.incoming (Lr1.lr0 s2) with
+          | None -> false
+          | Some sym' -> sym = sym');
+      tbl1.(Lr1.to_int s2) <- s1 :: tbl1.(Lr1.to_int s2)
+    in
+    Lr1.iter
+      (fun lr1 -> List.iter (revert_transition lr1) (Lr1.transitions lr1));
+    (fun lr1 -> tbl1.(Lr1.to_int lr1))
 
   type variable =
     | Head of lr1 * nonterminal
@@ -49,12 +65,14 @@ struct
 
   type 'a paction =
     | Abort
+    | Pop
     | Reduce of production
     | Shift  of symbol
     | Var    of 'a
 
   let paction_to_string variable_to_string = function
     | Abort -> "Abort"
+    | Pop -> "Pop"
     | Reduce prod -> "Reduce p" ^ string_of_int (Production.to_int prod)
     | Shift  sym -> "Shift " ^ (symbol_name sym)
     | Var v -> "Var (" ^ variable_to_string v ^ ")"
@@ -80,6 +98,32 @@ struct
         else
           let cost = cost_of_prod prod in
           const cost
+
+  let can_pop prod pos =
+    pos > 1 &&
+    (match (Production.rhs prod).(pos - 1) with
+     | T t, _, _ -> Terminal.typ t = None
+     | _ -> false)
+
+  let pop_cost st prod pos =
+    if can_pop prod pos then
+      let vars = List.map
+          (fun st' ->
+             List.map
+               (fun (prod', pos') -> Tail (st', prod', pos'))
+               (Lr0.items (Lr1.lr0 st')))
+          (pred st)
+      in
+      (fun v ->
+         (* Minimal solution in a specific state *)
+         let min_var acc var = min_float acc (v var) in
+         (* Maximal over all predecessors as approximation over
+            having per-predecessor decision *)
+         let max_vars acc vars =
+           max acc (List.fold_left min_var infinity vars)
+         in
+         List.fold_left max_vars neg_infinity vars)
+    else const infinity
 
   let cost_of = function
     | Head (st, n) ->
@@ -129,7 +173,8 @@ struct
                 (*report "no transition: #%d (%d,%d)\n" st.lr1_index prod.p_index pos;*)
                 const infinity
           in
-          (fun v -> head v +. tail v)
+          let pop = pop_cost st prod pos in
+          (fun v -> min (head v +. tail v) (pop v))
 
   let cost_of =
     let module Solver = MenhirSdk.Fix.Make (struct
@@ -151,12 +196,16 @@ struct
 
   let cost_of_action = function
     | Abort    -> infinity
+    | Pop      -> 0.5
     | Reduce p -> cost_of_prod p
     | Shift s  -> cost_of_symbol s
     | Var v    -> cost_of v
 
   let select var1 var2 =
     arg_min_float cost_of_action var1 var2
+
+  let cost_of_actions actions =
+    List.fold_left (fun cost act -> cost +. cost_of_action act) 0.0 actions
 
   let solution = function
     | Head (st, n) ->
@@ -205,10 +254,12 @@ struct
             | exception Not_found ->
                 Abort
           in
-          [head; tail]
-
-  let cost_of_actions actions =
-    List.fold_left (fun cost act -> cost +. cost_of_action act) 0.0 actions
+          if compare_float
+              (pop_cost st prod pos cost_of)
+              (cost_of_actions [head; tail]) < 0 then
+            [Pop]
+          else
+            [head; tail]
 
   let report ppf =
     let open Format in
@@ -216,7 +267,11 @@ struct
         (fun st acc ->
           match List.fold_left (fun (item, cost) (prod, pos) ->
               let cost' = cost_of (Tail (st, prod, pos)) in
-              assert (cost' = cost_of_actions (solution (Tail (st, prod, pos))));
+              let actions = solution (Tail (st, prod, pos)) in
+              if List.mem Pop actions then
+                assert (cost' >= cost_of_actions actions)
+              else
+                assert (cost' = cost_of_actions actions);
               if cost' < cost then (Some (prod, pos), cost') else (item, cost)
             ) (None, infinity) (Lr0.items (Lr1.lr0 st))
           with

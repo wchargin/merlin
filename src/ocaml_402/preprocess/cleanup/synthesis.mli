@@ -11,6 +11,7 @@ module type S = sig
 
   type 'a paction =
     | Abort
+    | Pop
     | Reduce of G.production
     | Shift  of G.symbol
     | Var    of 'a
@@ -20,6 +21,8 @@ module type S = sig
   type action = variable paction
 
   val action_to_string : action -> string
+
+  val pred : G.lr1 -> G.lr1 list
 
   val cost_of  : variable -> float
   val cost_of_action  : action -> float
