@@ -4,6 +4,7 @@ val default_value : 'a MenhirInterpreter.symbol -> 'a
 
 type t =
   | Abort
+  | Pop
   | Reduce of int
   | Shift : 'a MenhirInterpreter.symbol -> t
   | Sub of t list

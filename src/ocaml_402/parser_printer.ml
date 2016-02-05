@@ -219,7 +219,7 @@ let print_symbol = function
   | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_optional_type_parameters) -> "optional_type_parameters"
   | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_optional_type_parameter_list) -> "optional_type_parameter_list"
   | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_optional_type_parameter) -> "optional_type_parameter"
-  | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_option(STRING)) -> "option(STRING)"
+  | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_option_STRING_) -> "option_STRING_"
   | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_opt_semi) -> "opt_semi"
   | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_opt_default) -> "opt_default"
   | MenhirInterpreter.X (MenhirInterpreter.N MenhirInterpreter.N_opt_bar) -> "opt_bar"
@@ -554,7 +554,7 @@ let print_value (type a) : a MenhirInterpreter.symbol -> a -> string = function
   | MenhirInterpreter.N MenhirInterpreter.N_optional_type_parameters -> (fun _ -> "optional_type_parameters")
   | MenhirInterpreter.N MenhirInterpreter.N_optional_type_parameter_list -> (fun _ -> "optional_type_parameter_list")
   | MenhirInterpreter.N MenhirInterpreter.N_optional_type_parameter -> (fun _ -> "optional_type_parameter")
-  | MenhirInterpreter.N MenhirInterpreter.N_option(STRING) -> (fun _ -> "option(STRING)")
+  | MenhirInterpreter.N MenhirInterpreter.N_option_STRING_ -> (fun _ -> "option_STRING_")
   | MenhirInterpreter.N MenhirInterpreter.N_opt_semi -> (fun _ -> "opt_semi")
   | MenhirInterpreter.N MenhirInterpreter.N_opt_default -> (fun _ -> "opt_default")
   | MenhirInterpreter.N MenhirInterpreter.N_opt_bar -> (fun _ -> "opt_bar")
