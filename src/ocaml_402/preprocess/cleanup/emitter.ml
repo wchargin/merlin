@@ -26,15 +26,18 @@ end = struct
     | (x :: xs) as xxs ->
         try !(Hashtbl.find normalized_actions xxs)
         with Not_found ->
-          let x' = normalize_action x in
+          let x' = normalize_action ~flatten x in
           let xs' = normalize_actions ~flatten xs in
           let xxs' = x' :: xs' in
           Hashtbl.add normalized_actions xxs (ref xxs');
           xxs'
 
-  and normalize_action = function
+  and normalize_action ~flatten = function
     | Abort | Reduce _ | Shift _ | Pop as a -> a
-    | Var v -> Var (A (normalize_actions ~flatten:true (S.solution v)))
+    | Var v ->
+        match normalize_actions ~flatten:true (S.solution v) with
+        | [x] when flatten -> x
+        | xs -> Var (A xs)
 
   let items_to_actions items =
     let prepare (st, prod, pos) =
