@@ -1,5 +1,5 @@
 all:
-	ocamlbuild -tag debug -package menhirSdk main.native
+	ocamlbuild -tag debug -package menhirSdk -package menhirLib main.native
 
 clean:
 	ocamlbuild -clean

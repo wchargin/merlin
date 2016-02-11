@@ -66,7 +66,4 @@ let () = if !verbose then R.report Format.err_formatter
 
 module E = Emitter.Make(G)(A)(S)(R)
 
-let () =
-  let name = Filename.chop_extension (Filename.basename !name) in
-  E.emit_prelude ~name Format.std_formatter;
-  E.emit_recovery Format.std_formatter
+let () = E.emit Format.std_formatter

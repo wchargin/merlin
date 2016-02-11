@@ -4,6 +4,5 @@ module Make
     (S : Synthesis.S with module G = G)
     (R : Recovery.S with module G = G) :
 sig
-  val emit_prelude : name:string -> Format.formatter -> unit
-  val emit_recovery : Format.formatter -> unit
+  val emit : Format.formatter -> unit
 end
