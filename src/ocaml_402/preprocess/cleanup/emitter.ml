@@ -147,26 +147,28 @@ end = struct
     fprintf ppf "end\n\n";
     fprintf ppf "let default_value = Default.value\n\n"
 
-  type instr =
-    | KEnter
-    | KReturn
-    | KJump of int
-    | KConstant of int
-
   let emit_defs ppf =
     fprintf ppf "open %s\n\n" menhir;
-    fprintf ppf "type instr =\n\
-                \  | Enter\n\
-                \  | Return\n\
-                \  | Jump of int\n\
+    fprintf ppf "type t =\n\
                 \  | Abort\n\
                 \  | Pop\n\
                 \  | Reduce of int\n\
-                \  | Shift : 'a symbol -> instr\n\n"
+                \  | Shift : 'a symbol -> t\n\
+                \  | Get of int\n\
+                \  | Sub of t list\n\n"
 
   module C = Codeconsing(S)(R)
 
-  let code, get_instr, iter_entries =
+  let emit_depth ppf =
+    let open Format in
+    fprintf ppf "let depth =\n  [|";
+    Lr1.iter (fun st ->
+        let depth, _ = R.recover st in
+        fprintf ppf "%d;" depth
+      );
+    fprintf ppf "|]\n"
+
+  let _code, get_instr, iter_entries =
     Lr1.iter (fun st ->
         let _depth, cases = R.recover st in
         List.iter (fun (_case, items) -> C.record_items (List.rev items))
@@ -184,160 +186,66 @@ end = struct
     code, get_instr,
     (fun f -> Lr1.iter (fun st -> List.iter f (all_instrs st)))
 
-  let emit_constants ppf =
-    let table = Hashtbl.create 113 in
+  let emit_recoveries ppf =
     let k = ref 0 in
-    let constants = ref [] in
-    let rec emit_constant = function
+    let instrs = ref [] in
+    let rec alloc_entry = function
       | C.Nil -> ()
-      | C.Cons (action, instr) ->
-        emit_action action;
-        emit_constant instr
+      | C.Cons (act, instr) -> alloc_entry_action act; alloc_entry instr
       | C.Ref (r, instr) ->
-        if !r = -1
-        then (r := -2; emit_constant instr)
-        else assert (!r = -2)
-    and emit_action = function
-      | S.Var v -> emit_constant v
-      | a ->
-        if Hashtbl.mem table a then () else (
-          constants := a :: !constants;
-          Hashtbl.add table a !k;
-          incr k
-        )
+        if (!r = -1) then (
+          alloc_entry instr;
+          r := !k;
+          instrs := (!k, instr) :: !instrs;
+          incr k;
+          )
+    and alloc_entry_action = function
+      | S.Abort | S.Reduce _ | S.Shift _ | S.Pop -> ()
+      | S.Var instr -> alloc_entry instr
     in
-    iter_entries emit_constant;
+    iter_entries alloc_entry;
     let open Format in
-    let emit_const = function
-      | S.Abort -> fprintf ppf "Abort; "
-      | S.Pop   -> fprintf ppf "Pop; "
-      | S.Reduce prod -> fprintf ppf "Reduce %d; " (Production.to_int prod)
-      | S.Shift (T t) -> fprintf ppf "Shift (T T_%s); " (Terminal.name t)
-      | S.Shift (N n) -> fprintf ppf "Shift (N N_%s); " (Nonterminal.mangled_name n)
-      | _ -> assert false
-    in
-    fprintf ppf "let constants =\n  [|";
-    List.iter emit_const (List.rev !constants);
-    fprintf ppf "|]\n";
-    (fun v -> try Hashtbl.find table v with Not_found -> assert false),
-    !k
 
-  let link_code csts ppf =
-    let ptr = ref 0 in
-    let code = ref [] in
-    let emit_one x =
-      code := x :: !code;
-      incr ptr;
+    let rec emit_action ppf = function
+      | S.Abort -> fprintf ppf "Abort"
+      | S.Pop   -> fprintf ppf "Pop"
+      | S.Reduce prod -> fprintf ppf "Reduce %d" (Production.to_int prod)
+      | S.Shift (T t) -> fprintf ppf "Shift (T T_%s)" (Terminal.name t)
+      | S.Shift (N n) -> fprintf ppf "Shift (N N_%s)" (Nonterminal.mangled_name n)
+      | S.Var instr -> fprintf ppf "Sub (%a)" emit_instr instr
+    and emit_instr ppf = function
+      | C.Nil -> fprintf ppf "[]"
+      | C.Cons (act, instr) ->
+        fprintf ppf "%a :: %a" emit_action act emit_instr instr
+      | C.Ref (r, _) -> fprintf ppf "[Get %d]" !r
     in
-    let rec emit_instr = function
-      | C.Nil -> emit_one KReturn
-      | C.Ref (r, _) when !r >= 0 ->
-        emit_one (KJump !r)
-      | C.Ref (r, instr) ->
-        r := !ptr;
-        emit_instr instr
-      | C.Cons (S.Var v, C.Nil) ->
-        emit_instr v
-      | C.Cons (S.Var v, instr) ->
-        emit_one KEnter;
-        emit_instr v;
-        emit_instr instr
-      | C.Cons (a, instr) ->
-        emit_one (KConstant (csts a));
-        emit_instr instr
-    in
-    let emit_entry instr =
-      let ptr = !ptr in
-      emit_instr instr;
-      ptr
-    in
-    let table = Hashtbl.create 113 in
-    iter_entries (fun entry -> Hashtbl.add table entry (emit_entry entry));
-    let code = Array.of_list (List.rev !code) in
-    code, Hashtbl.find table
 
-  let emit_packed ppf (k,str) =
-    Format.fprintf ppf "(%d, %S)" k str
+    fprintf ppf "let shared = [|\n";
+    let emit_shared k' (k, instr) =
+      assert (k = k');
+      fprintf ppf "  %a;\n" emit_instr instr
+    in
+    List.iteri emit_shared (List.rev !instrs);
+    fprintf ppf "|]\n\n";
 
-  let emit_code cst_count code ppf =
-    let encode = function
-      | KEnter -> 0
-      | KReturn -> 1
-      | KConstant cst -> 2 + cst
-      | KJump offset -> 2 + cst_count + offset
-    in
-    let packed =
-      code
-      |> Array.map encode
-      |> MenhirLib.PackedIntArray.pack
-    in
-    let open Format in
-    fprintf ppf
-      "let decode =\n\
-      \  let aux = function
-      \    | 0 -> Enter\n\
-      \    | 1 -> Return\n\
-      \    | n ->\n\
-      \      let n = n - 2 and cst_count = Array.length constants in\n\
-      \      if n < cst_count then constants.(n)\n\
-      \      else (KJump (n - cst_count))\n\
-      \  in\n\
-      \  let bytecode = %a in\n\
-      \  fun i -> aux (MenhirLib.PackedIntArray.get bytecode i)\n\n"
-      emit_packed packed
+    fprintf ppf "let recover = [|\n";
+    Lr1.iter (fun st ->
+        fprintf ppf "    [|";
+        let _, cases = R.recover st in
+        List.iter (fun (st', items) ->
+            fprintf ppf "(%d, %a);"
+              (match st' with None -> -1 | Some st' -> Lr1.to_int st')
+              emit_instr (get_instr items)
+          ) cases;
+        fprintf ppf "|];\n";
+      );
+    fprintf ppf "  |]\n"
 
-  let emit_depth ppf =
-    let packed =
-      Array.init Lr1.count (fun st -> fst (R.recover (Lr1.of_int st)))
-      |> MenhirLib.PackedIntArray.pack
-    in
-    let open Format in
-    fprintf ppf
-      "let depth =\n\
-      \  let depthmap = %a in\n\
-      \  fun i -> MenhirLib.PackedIntArray.get depthmap i\n\n"
-      emit_packed packed
-
-  let emit_dispatch_table ppf entries =
-    let table =
-      Array.init Lr1.count @@ fun st ->
-      let st = Lr1.of_int st in
-      let row = Array.make (Lr1.count + 1) 0 in
-      let _, cases = R.recover st in
-      List.iter (fun (st', items) ->
-          let idx = match st' with
-            | None -> Lr1.count
-            | Some st' -> Lr1.to_int st'
-          in
-          row.(idx) <- entries (get_instr items)
-        ) cases;
-      row
-    in
-    let disp, data =
-      MenhirLib.RowDisplacement.compress ((=) : int -> int -> bool) ((=) 0) 0
-        Lr1.count (Lr1.count + 1)
-        table
-    in
-    let (_, s) = MenhirLib.PackedIntArray.pack data in
-    let c = open_out "data.out" in
-    output_string c s;
-    close_out c;
-    fprintf ppf
-      "let entrypoint =\n\
-      \  let disp = %a in\n\
-      \  let data = %a in\n\
-      \  fun st1 st2 -> \n\
-      \    MenhirLib.PackedIntArray.unmarshal2 disp data st1 st2\n\n"
-      emit_packed (MenhirLib.PackedIntArray.pack disp)
-      emit_packed (MenhirLib.PackedIntArray.pack data)
 
   let emit ppf =
     emit_default_value ppf;
     emit_defs ppf;
-    let csts, cst_count = emit_constants ppf in
-    let code, entries = link_code csts ppf in
-    emit_code cst_count code ppf;
     emit_depth ppf;
-    emit_dispatch_table ppf entries
+    emit_recoveries ppf
 
 end
