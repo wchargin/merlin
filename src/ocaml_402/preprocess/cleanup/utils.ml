@@ -64,3 +64,8 @@ let string_of_stretch s =
 let string_of_type = function
   | Stretch.Inferred s -> s
   | Stretch.Declared s -> string_of_stretch s
+
+let rec list_last = function
+  | [x] -> x
+  | _ :: xs -> list_last xs
+  | [] -> invalid_arg "list_last"

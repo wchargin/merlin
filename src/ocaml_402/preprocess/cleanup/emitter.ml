@@ -6,7 +6,7 @@ let menhir = "MenhirInterpreter"
 module Codeconsing (S : Synthesis.S) (R : Recovery.S with module G = S.G) : sig
 
   (* Step 1: record all definitions *)
-  val record_items : R.item list -> unit
+  val record_item : R.item -> unit
 
   type instr =
     | Nil
@@ -14,7 +14,7 @@ module Codeconsing (S : Synthesis.S) (R : Recovery.S with module G = S.G) : sig
     | Ref of int ref * instr
 
   (* Step 2: get prelude maximizing & serialization function *)
-  val normalize : unit -> instr list * (R.item list -> instr)
+  val normalize : unit -> instr list * (R.item -> instr)
 
 end = struct
 
@@ -25,33 +25,31 @@ end = struct
 
   let normalized_actions = Hashtbl.create 113
 
-  let rec normalize_actions ~flatten = function
+  let rec normalize_actions = function
     | [] -> []
-    | [Var v] when flatten -> normalize_actions ~flatten:true (S.solution v)
+    | [Var v] -> normalize_actions (S.solution v)
     | (x :: xs) as xxs ->
         try !(Hashtbl.find normalized_actions xxs)
         with Not_found ->
-          let x' = normalize_action ~flatten x in
-          let xs' = normalize_actions ~flatten xs in
+          let x' = normalize_action x in
+          let xs' = normalize_actions xs in
           let xxs' = x' :: xs' in
           Hashtbl.add normalized_actions xxs (ref xxs');
           xxs'
 
-  and normalize_action ~flatten = function
+  and normalize_action = function
     | Abort | Reduce _ | Shift _ | Pop as a -> a
     | Var v ->
-        match normalize_actions ~flatten:true (S.solution v) with
-        | [x] when flatten -> x
+        match normalize_actions (S.solution v) with
+        | [x] -> x
         | xs -> Var (A xs)
 
-  let items_to_actions items =
-    let prepare (st, prod, pos) =
-      Var (Tail (st, prod, pos)) in
-    normalize_actions ~flatten:false (List.map prepare items)
+  let item_to_actions (st, prod, pos) =
+    normalize_actions [Var (Tail (st, prod, pos))]
 
-  let roots : R.item list list ref = ref []
+  let roots : R.item list ref = ref []
 
-  let record_items root =
+  let record_item root =
     roots := root :: !roots
 
   let share () =
@@ -105,12 +103,12 @@ end = struct
     frozen, values, emit
 
   let normalize () =
-    let roots = List.map items_to_actions !roots in
+    let roots = List.map item_to_actions !roots in
     let frozen, values, emit = emitter () in
-    let pass_2 items = ignore (emit items) in
+    let pass_2 item = ignore (emit item) in
     List.iter pass_2 roots;
     frozen := true;
-    !values, (fun items -> emit (items_to_actions items))
+    !values, (fun item -> emit (item_to_actions item))
 end
 
 module Make
@@ -154,7 +152,6 @@ end = struct
                 \  | Pop\n\
                 \  | Reduce of int\n\
                 \  | Shift : 'a symbol -> t\n\
-                \  | Get of int\n\
                 \  | Sub of t list\n\n"
 
   module C = Codeconsing(S)(R)
@@ -171,15 +168,14 @@ end = struct
   let _code, get_instr, iter_entries =
     Lr1.iter (fun st ->
         let _depth, cases = R.recover st in
-        List.iter (fun (_case, items) -> C.record_items (List.rev items))
+        List.iter (fun (_case, items) -> C.record_item (list_last items))
           cases
       );
     let code, get_instr = C.normalize () in
-    let get_instr items = get_instr (List.rev items) in
     let all_instrs =
       Lr1.tabulate (fun st ->
           let _depth, cases = R.recover st in
-          List.map (fun (_case, items) -> get_instr items)
+          List.map (fun (_case, items) -> get_instr (list_last items))
             cases
         )
     in
@@ -217,25 +213,22 @@ end = struct
       | C.Nil -> fprintf ppf "[]"
       | C.Cons (act, instr) ->
         fprintf ppf "%a :: %a" emit_action act emit_instr instr
-      | C.Ref (r, _) -> fprintf ppf "[Get %d]" !r
+      | C.Ref (r, _) -> fprintf ppf "r%d" !r
     in
 
-    fprintf ppf "let shared = [|\n";
-    let emit_shared k' (k, instr) =
-      assert (k = k');
-      fprintf ppf "  %a;\n" emit_instr instr
+    let emit_shared (k, instr) =
+      fprintf ppf "  let r%d = %a in\n" k emit_instr instr
     in
-    List.iteri emit_shared (List.rev !instrs);
-    fprintf ppf "|]\n\n";
+    List.iter emit_shared (List.rev !instrs);
 
-    fprintf ppf "let recover = [|\n";
+    fprintf ppf "[|\n";
     Lr1.iter (fun st ->
         fprintf ppf "    [|";
         let _, cases = R.recover st in
         List.iter (fun (st', items) ->
             fprintf ppf "(%d, %a);"
               (match st' with None -> -1 | Some st' -> Lr1.to_int st')
-              emit_instr (get_instr items)
+              emit_instr (get_instr (list_last items))
           ) cases;
         fprintf ppf "|];\n";
       );
