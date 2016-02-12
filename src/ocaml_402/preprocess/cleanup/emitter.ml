@@ -3,6 +3,9 @@ open Utils
 
 let menhir = "MenhirInterpreter"
 
+(* Generation scheme doing checks and failing at runtime, or not ... *)
+let safe = false
+
 module Codeconsing (S : Synthesis.S) (R : Recovery.S with module G = S.G) : sig
 
   (* Step 1: record all definitions *)
@@ -70,7 +73,7 @@ end = struct
     in
     Hashtbl.iter (fun k v -> v := get !v) normalized_actions;
     (* Return counter *)
-    (fun v -> !(fst (Hashtbl.find table v)))
+    (fun v -> try !(fst (Hashtbl.find table v)) with Not_found -> 0)
 
   type instr =
     | Nil
@@ -141,18 +144,22 @@ end = struct
         | Some str ->
             fprintf ppf "    | %s.N %s.N_%s -> %s\n" menhir menhir (Nonterminal.mangled_name n) str
       );
-    fprintf ppf "    | _ -> raise Not_found\n";
+    (*fprintf ppf "    | _ -> raise Not_found\n"; should be exhaustive*)
     fprintf ppf "end\n\n";
     fprintf ppf "let default_value = Default.value\n\n"
 
   let emit_defs ppf =
     fprintf ppf "open %s\n\n" menhir;
-    fprintf ppf "type t =\n\
+    fprintf ppf "type action =\n\
                 \  | Abort\n\
                 \  | Pop\n\
-                \  | Reduce of int\n\
-                \  | Shift : 'a symbol -> t\n\
-                \  | Sub of t list\n\n"
+                \  | R of int\n\
+                \  | S : 'a symbol -> t\n\
+                \  | Sub of t list\n\n";
+    fprintf ppf "type decision =\n\
+                \  | None\n\
+                \  | One of action\n\
+                \  | Select of (int -> action)\n\n"
 
   module C = Codeconsing(S)(R)
 
@@ -205,12 +212,14 @@ end = struct
     let rec emit_action ppf = function
       | S.Abort -> fprintf ppf "Abort"
       | S.Pop   -> fprintf ppf "Pop"
-      | S.Reduce prod -> fprintf ppf "Reduce %d" (Production.to_int prod)
-      | S.Shift (T t) -> fprintf ppf "Shift (T T_%s)" (Terminal.name t)
-      | S.Shift (N n) -> fprintf ppf "Shift (N N_%s)" (Nonterminal.mangled_name n)
+      | S.Reduce prod -> fprintf ppf "R %d" (Production.to_int prod)
+      | S.Shift (T t) -> fprintf ppf "S (T T_%s)" (Terminal.name t)
+      | S.Shift (N n) -> fprintf ppf "S (N N_%s)" (Nonterminal.mangled_name n)
       | S.Var instr -> fprintf ppf "Sub (%a)" emit_instr instr
     and emit_instr ppf = function
       | C.Nil -> fprintf ppf "[]"
+      | C.Cons (act, C.Nil) ->
+        fprintf ppf "[%a]" emit_action act
       | C.Cons (act, instr) ->
         fprintf ppf "%a :: %a" emit_action act emit_instr instr
       | C.Ref (r, _) -> fprintf ppf "r%d" !r
@@ -221,18 +230,58 @@ end = struct
     in
     List.iter emit_shared (List.rev !instrs);
 
-    fprintf ppf "[|\n";
-    Lr1.iter (fun st ->
-        fprintf ppf "    [|";
-        let _, cases = R.recover st in
-        List.iter (fun (st', items) ->
-            fprintf ppf "(%d, %a);"
+    let all_cases =
+      Lr1.fold (fun st acc ->
+          let _, cases = R.recover st in
+          let cases = List.map (fun (st', items) ->
+              (get_instr (list_last items)),
               (match st' with None -> -1 | Some st' -> Lr1.to_int st')
-              emit_instr (get_instr (list_last items))
-          ) cases;
-        fprintf ppf "|];\n";
-      );
-    fprintf ppf "  |]\n"
+            ) cases
+          in
+          let cases = match group_assoc cases with
+            | [] -> `None
+            | [(instr, _)] -> `One instr
+            | xs -> `Select xs
+          in
+          (cases, (Lr1.to_int st)) :: acc)
+        []
+    in
+    let all_cases = group_assoc all_cases in
+
+    fprintf ppf "  function\n";
+    List.iter (fun (cases, states) ->
+        fprintf ppf "  ";
+        List.iter (fprintf ppf "| %d ") states;
+        fprintf ppf "-> ";
+        match cases with
+        | `None -> fprintf ppf "None\n";
+        | `One instr -> fprintf ppf "One (%a)\n" emit_instr instr
+        | `Select xs ->
+          fprintf ppf "Select (function\n";
+          if safe then (
+            List.iter (fun (instr, cases) ->
+                fprintf ppf "    ";
+                List.iter (fprintf ppf "| %d ") cases;
+                fprintf ppf "-> %a\n" emit_instr instr;
+              ) xs;
+            fprintf ppf "    | _ -> raise Not_found)\n"
+          ) else (
+            match List.sort
+                    (fun (_,a) (_,b) -> compare (List.length b) (List.length a))
+                    xs
+            with
+            | (instr, _) :: xs ->
+              List.iter (fun (instr, cases) ->
+                  fprintf ppf "    ";
+                  List.iter (fprintf ppf "| %d ") cases;
+                  fprintf ppf "-> %a\n" emit_instr instr;
+                ) xs;
+              fprintf ppf "    | _ -> %a)\n" emit_instr instr
+            | [] -> assert false
+          )
+      ) all_cases;
+
+    fprintf ppf "  | _ -> raise Not_found\n"
 
 
   let emit ppf =
