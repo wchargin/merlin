@@ -154,12 +154,12 @@ end = struct
                 \  | Abort\n\
                 \  | Pop\n\
                 \  | R of int\n\
-                \  | S : 'a symbol -> t\n\
-                \  | Sub of t list\n\n";
+                \  | S : 'a symbol -> action\n\
+                \  | Sub of action list\n\n";
     fprintf ppf "type decision =\n\
-                \  | None\n\
-                \  | One of action\n\
-                \  | Select of (int -> action)\n\n"
+                \  | Nothing\n\
+                \  | One of action list\n\
+                \  | Select of (int -> action list)\n\n"
 
   module C = Codeconsing(S)(R)
 
@@ -225,6 +225,8 @@ end = struct
       | C.Ref (r, _) -> fprintf ppf "r%d" !r
     in
 
+    fprintf ppf "let recover =\n";
+
     let emit_shared (k, instr) =
       fprintf ppf "  let r%d = %a in\n" k emit_instr instr
     in
@@ -239,7 +241,7 @@ end = struct
             ) cases
           in
           let cases = match group_assoc cases with
-            | [] -> `None
+            | [] -> `Nothing
             | [(instr, _)] -> `One instr
             | xs -> `Select xs
           in
@@ -254,7 +256,7 @@ end = struct
         List.iter (fprintf ppf "| %d ") states;
         fprintf ppf "-> ";
         match cases with
-        | `None -> fprintf ppf "None\n";
+        | `Nothing -> fprintf ppf "Nothing\n";
         | `One instr -> fprintf ppf "One (%a)\n" emit_instr instr
         | `Select xs ->
           fprintf ppf "Select (function\n";
