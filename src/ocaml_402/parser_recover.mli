@@ -4,7 +4,6 @@ val default_value : 'a MenhirInterpreter.symbol -> 'a
 
 type action =
   | Abort
-  | Pop
   | R of int
   | S : 'a MenhirInterpreter.symbol -> action
   | Sub of action list
@@ -15,5 +14,7 @@ type decision =
   | Select of (int -> action list)
 
 val depth : int array
+
+val can_pop : 'a MenhirInterpreter.terminal -> bool
 
 val recover : int -> decision
