@@ -11,7 +11,6 @@ module type S = sig
 
   type 'a paction =
     | Abort
-    | Pop
     | Reduce of G.production
     | Shift  of G.symbol
     | Var    of 'a

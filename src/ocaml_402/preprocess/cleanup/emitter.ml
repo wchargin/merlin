@@ -41,7 +41,7 @@ end = struct
           xxs'
 
   and normalize_action = function
-    | Abort | Reduce _ | Shift _ | Pop as a -> a
+    | Abort | Reduce _ | Shift _ as a -> a
     | Var v ->
         match normalize_actions (S.solution v) with
         | [x] -> x
@@ -92,7 +92,7 @@ end = struct
           with Not_found ->
             let x = match x with
               | Var (A ys) -> Var (emit ys)
-              | Pop | Abort | Reduce _ | Shift _ as a -> a
+              | Abort | Reduce _ | Shift _ as a -> a
             in
             let value = Cons (x, emit xs) in
             if counter xxs = 1 then value else (
@@ -152,7 +152,6 @@ end = struct
     fprintf ppf "open %s\n\n" menhir;
     fprintf ppf "type action =\n\
                 \  | Abort\n\
-                \  | Pop\n\
                 \  | R of int\n\
                 \  | S : 'a symbol -> action\n\
                 \  | Sub of action list\n\n";
@@ -170,7 +169,7 @@ end = struct
         let depth, _ = R.recover st in
         fprintf ppf "%d;" depth
       );
-    fprintf ppf "|]\n"
+    fprintf ppf "|]\n\n"
 
   let _code, get_instr, iter_entries =
     Lr1.iter (fun st ->
@@ -189,6 +188,13 @@ end = struct
     code, get_instr,
     (fun f -> Lr1.iter (fun st -> List.iter f (all_instrs st)))
 
+  let emit_can_pop ppf =
+    Format.fprintf ppf "let can_pop (type a) : a terminal -> bool = function\n  ";
+    G.Terminal.iter (fun t ->
+        if G.Terminal.kind t = `REGULAR && G.Terminal.typ t = None then
+          Format.fprintf ppf "  | T_%s -> true\n" (G.Terminal.name t));
+    Format.fprintf ppf "  | _ -> false\n\n"
+
   let emit_recoveries ppf =
     let k = ref 0 in
     let instrs = ref [] in
@@ -203,7 +209,7 @@ end = struct
           incr k;
           )
     and alloc_entry_action = function
-      | S.Abort | S.Reduce _ | S.Shift _ | S.Pop -> ()
+      | S.Abort | S.Reduce _ | S.Shift _ -> ()
       | S.Var instr -> alloc_entry instr
     in
     iter_entries alloc_entry;
@@ -211,7 +217,6 @@ end = struct
 
     let rec emit_action ppf = function
       | S.Abort -> fprintf ppf "Abort"
-      | S.Pop   -> fprintf ppf "Pop"
       | S.Reduce prod -> fprintf ppf "R %d" (Production.to_int prod)
       | S.Shift (T t) -> fprintf ppf "S (T T_%s)" (Terminal.name t)
       | S.Shift (N n) -> fprintf ppf "S (N N_%s)" (Nonterminal.mangled_name n)
@@ -290,6 +295,7 @@ end = struct
     emit_default_value ppf;
     emit_defs ppf;
     emit_depth ppf;
+    emit_can_pop ppf;
     emit_recoveries ppf
 
 end
